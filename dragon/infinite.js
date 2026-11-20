@@ -19,8 +19,6 @@
   const MAX_CLIMB = 90;
   const MAX_LEAVES = 40e6;      // 한 번에 그리는 선 최대 개수 (멈춤 방지)
   const FAR = 4;                // 카메라가 프레임에서 이보다 멀어지면(프레임 단위) 프레임을 옮김
-  const BUF_SCALE = 1.35;       // 버퍼 한 변 = 화면 대각선 × 이 값 (회전해도 화면을 덮도록)
-  const BUF_MAX_PIXELS = 40e6;
   const GEN_STEP = 0.13;        // 세대별 색: 세대마다 그라데이션에서 이동하는 양
   const DEPTH_STEP = 0.03;     // 접힘 그라데이션: 오른쪽으로 접힐 때마다 이동하는 양
 
@@ -50,21 +48,22 @@
 
   // 카메라: 프레임 좌표의 중심(x,y), 배율 s(CSS px / 프레임 단위), 화면 회전 rot(라디안)
   const cam = { x: 0.5, y: 0, s: 300, rot: 0 };
-  let bufView = null;          // 버퍼가 그려진 시점의 카메라 (프레임 좌표)
-  let pendingView = null;      // 렌더 요청 중인 카메라
   let absZoom0 = 0;            // 처음 배율 (표시용)
 
   // 프레임 바꾸기: 새 좌표 q = (p − A) / D  (복소수)
   function changeFrame(ax, ay, dx, dy) {
     const d2 = dx * dx + dy * dy;
     const mag = Math.sqrt(d2), ang = Math.atan2(dy, dx);
-    for (const v of [cam, bufView, pendingView]) {
-      if (!v) continue;
-      const px = v.x - ax, py = v.y - ay;
-      v.x = (px * dx + py * dy) / d2;
-      v.y = (py * dx - px * dy) / d2;
-      v.s *= mag;
-      v.rot = (v.rot + ang) % (Math.PI * 2);
+    const px = cam.x - ax, py = cam.y - ay;
+    cam.x = (px * dx + py * dy) / d2;
+    cam.y = (py * dx - px * dy) / d2;
+    cam.s *= mag;
+    cam.rot = (cam.rot + ang) % (Math.PI * 2);
+    // 타일 앵커도 같이: a' = a/D, b' = (b − A)/D
+    for (const an of anchors) {
+      const ar = an.ar, ai = an.ai, br = an.br - ax, bi = an.bi - ay;
+      an.ar = (ar * dx + ai * dy) / d2; an.ai = (ai * dx - ar * dy) / d2;
+      an.br = (br * dx + bi * dy) / d2; an.bi = (bi * dx - br * dy) / d2;
     }
   }
 
@@ -155,6 +154,7 @@
       if (!canvas || canvas.width !== m.w || canvas.height !== m.h) { canvas = makeCanvas(m.w, m.h); ctx = canvas.getContext('2d'); }
       ctx.setTransform(1, 0, 0, 1, 0, 0);
       ctx.clearRect(0, 0, m.w, m.h);
+      if (m.opaque) { ctx.fillStyle = '#000'; ctx.fillRect(0, 0, m.w, m.h); }   // 타일은 불투명: 겹쳐 그리면 덮어씀
 
       const K = m.colors.length, gs = m.gs, w = m.w, h = m.h, R = m.radius, pad = m.pad;
       const thr2 = m.thr * m.thr;
@@ -243,24 +243,38 @@
         ctx.globalAlpha = 1;
       }
       const bitmap = canvas.transferToImageBitmap ? canvas.transferToImageBitmap() : canvas;
-      const out = { id: m.id, kind: m.kind, leaves, bitmap, w: m.w, h: m.h };
+      const out = { id: m.id, kind: m.kind, key: m.key, gen: m.gen, leaves, bitmap, w: m.w, h: m.h };
       if (canvas.transferToImageBitmap) port.postMessage(out, [bitmap]); else port.postMessage(out);
     };
   }
 
-  const renderer = (() => {
+  // 렌더 작업자 여러 개 (CPU 코어를 나눠 씀)
+  const pool = (() => {
     const h = { onResult: null };
+    const workers = [];
     try {
       if (typeof OffscreenCanvas === 'undefined' || !OffscreenCanvas.prototype.transferToImageBitmap) throw new Error('no offscreen');
       const src = '(' + infRenderer.toString() + ')(self, (w, h) => new OffscreenCanvas(w, h));';
-      const wk = new Worker(URL.createObjectURL(new Blob([src], { type: 'text/javascript' })));
-      wk.onmessage = (e) => h.onResult && h.onResult(e.data);
-      return { post: (m) => wk.postMessage(m), h };
+      const url = URL.createObjectURL(new Blob([src], { type: 'text/javascript' }));
+      const n = Math.max(1, Math.min(6, (navigator.hardwareConcurrency || 4) - 1));
+      for (let i = 0; i < n; i++) {
+        const wk = new Worker(url);
+        const w = { busy: 0, post: (m) => wk.postMessage(m) };
+        wk.onmessage = (e) => { w.busy--; h.onResult && h.onResult(e.data); };
+        workers.push(w);
+      }
     } catch (err) {
-      const port = { onmessage: null, postMessage: (m) => setTimeout(() => h.onResult && h.onResult(m), 0) };
-      infRenderer(port, (w, hh) => { const c = document.createElement('canvas'); c.width = w; c.height = hh; return c; });
-      return { post: (m) => port.onmessage({ data: m }), h };
+      const port = { onmessage: null, postMessage: null };
+      const w = { busy: 0, post: (m) => port.onmessage({ data: m }) };
+      port.postMessage = (m) => setTimeout(() => { w.busy--; h.onResult && h.onResult(m); }, 0);
+      infRenderer(port, (ww, hh) => { const c = document.createElement('canvas'); c.width = ww; c.height = hh; return c; });
+      workers.push(w);
     }
+    return {
+      h, workers,
+      idle(maxBusy) { let best = null; for (const w of workers) if (w.busy < maxBusy && (!best || w.busy < best.busy)) best = w; return best; },
+      post(w, m) { w.busy++; w.post(m); },
+    };
   })();
 
   // ---------------------------------------------------------
@@ -270,22 +284,16 @@
   const overlay = document.getElementById('overlay');
   const tCtx = trail.getContext('2d');
   const oCtx = overlay.getContext('2d');
-  const buf = document.createElement('canvas');
-  const bufCtx = buf.getContext('2d');
   const view = { W: 0, H: 0, DPR: 1 };
-  let dirty = true, inflight = false, forceRender = true, renderId = 0, lastLeaves = 0;
-  let renderStart = 0, renderMs = 200;
+  let dirty = true, lastLeaves = 0;
 
   function resize() {
+    const oldDpr = view.DPR;
     view.DPR = Math.min(window.devicePixelRatio || 1, 2);
     view.W = window.innerWidth; view.H = window.innerHeight;
     for (const c of [trail, overlay]) { c.width = Math.round(view.W * view.DPR); c.height = Math.round(view.H * view.DPR); }
-    forceRender = true; dirty = true;
-  }
-
-  function bufferSide() {
-    const diag = Math.hypot(view.W, view.H) * view.DPR * BUF_SCALE;
-    return Math.round(Math.min(diag, Math.sqrt(BUF_MAX_PIXELS), 12000));
+    if (oldDpr !== view.DPR && typeof invalidateTiles === 'function') invalidateTiles();
+    dirty = true;
   }
 
   // 프레임 좌표 → (버퍼 또는 화면) 픽셀: pix = sDev·e^{iθ}(p − c) + center
@@ -324,82 +332,188 @@
     return { ax, ay, bx, by, sign: signOfDepth(idx), level, count: frame.cnt[idx], H };
   }
 
-  function requestRender() {
-    if (inflight) return;
-    const side = bufferSide();
-    const v = { x: cam.x, y: cam.y, s: cam.s, rot: cam.rot };
-    // 계속 축소 중이면 렌더가 끝날 즈음의 배율로 미리 넓게 그려 둠 (가장자리가 비지 않게)
-    if (!paused && autoMode === 'out') {
-      const lat = Math.min(2, Math.max(0.05, renderMs * 1.5 / 1000));
-      v.s *= Math.pow(2, -zoomSpeed * lat);
-    }
-    const sDev = v.s * view.DPR;
-    const root = findRoot(v, (side * Math.SQRT1_2) / sDev);
-    const map = makeMap(v, sDev, side / 2, side / 2);
+  // ---------------------------------------------------------
+  // 타일 (자유 탐색용)
+  // 화면을 정사각형 타일로 나눠 각각 따로 그려 두고 재사용한다.
+  // 확대하면 타일 하나 → 더 세밀한 타일 4개, 축소하면 4개 → 큰 타일 1개.
+  // 아직 안 그려진 곳은 이미 있는 큰(흐린) 타일이나 작은 타일로 메꾼다.
+  // 타일 격자는 "앵커" 좌표계에 고정 → 기준 선분이 바뀌어도 타일을 계속 쓸 수 있음.
+  // ---------------------------------------------------------
+  const TILE = 384;             // 타일 한 변 (기기 px)
+  const TMARGIN = 24;           // 타일 가장자리 여유 (번짐이 잘리지 않게, 그린 뒤 잘라냄)
+  const TW = TILE + TMARGIN * 2;
+  const MAX_TILES = 360;
+  const tiles = new Map();      // key → { anc, L, i, j, bmp }
+  let staleTiles = [];          // 설정 바뀌기 전 타일 (새 타일이 올 때까지 밑에 깔아 둠)
+  let tileGen = 0;
+  const tileInflight = new Set();
+  let anchors = [];             // 앵커: 격자 좌표 → 프레임 좌표, z_f = a·z_g + b (복소수)
+  let anchor = null, anchorSeq = 0;
+  let tileNeed = 0, tileHave = 0, coverageComplete = false;
+
+  function newAnchor() {
+    anchor = { id: ++anchorSeq, ar: 1, ai: 0, br: cam.x, bi: cam.y };
+    anchors.push(anchor);
+  }
+  function clearTiles() {
+    for (const t of tiles.values()) t.bmp.close && t.bmp.close();
+    for (const t of staleTiles) t.bmp.close && t.bmp.close();
+    tiles.clear(); staleTiles = []; tileInflight.clear();
+    tileGen++;
+    anchors = []; newAnchor();
+    dirty = true;
+  }
+  // 색·세밀도 등이 바뀜: 지금 타일은 밑그림으로 남기고 새로 그림
+  function invalidateTiles() {
+    for (const t of tiles.values()) staleTiles.push(t);
+    tiles.clear(); tileInflight.clear();
+    tileGen++;
+    dirty = true;
+  }
+
+  const gridFromFrame = (anc, x, y) => {
+    const px = x - anc.br, py = y - anc.bi, d2 = anc.ar * anc.ar + anc.ai * anc.ai;
+    return [(px * anc.ar + py * anc.ai) / d2, (py * anc.ar - px * anc.ai) / d2];
+  };
+
+  function requestTile(w, L, i, j, key) {
+    const anc = anchor;
+    const u = Math.pow(2, -L);
+    const gx = (i + 0.5) * u, gy = (j + 0.5) * u;
+    const fx = anc.ar * gx - anc.ai * gy + anc.br, fy = anc.ar * gy + anc.ai * gx + anc.bi;
+    const amag = Math.hypot(anc.ar, anc.ai);
+    const sDev = TILE / (u * amag);
+    const v = { x: fx, y: fy, s: sDev / view.DPR, rot: -Math.atan2(anc.ai, anc.ar) };
+    const root = findRoot(v, (TW * Math.SQRT1_2) / sDev);
+    const map = makeMap(v, sDev, TW / 2, TW / 2);
     const [ax, ay] = map(root.ax, root.ay);
     const [bx, by] = map(root.bx, root.by);
-    // 회전이 들어가면 부호(꺾이는 방향)는 그대로: 회전은 방향을 보존하는 변환
-    renderer.post({
-      id: ++renderId, w: side, h: side,
+    tileInflight.add(key);
+    pool.post(w, {
+      id: 0, kind: 'tile', key, gen: tileGen, opaque: true, w: TW, h: TW,
       root: { ax, ay, bx, by, sign: root.sign, level: root.level, count: root.count, H: root.H },
       gs, thr: leafPx * view.DPR, radius: RADIUS, pad: 6 * view.DPR,
       glow: 5 * view.DPR, core: 1.3 * view.DPR,
       colors: color.colors, colorsRgb: color.rgb, mode: colorMode, genStep: GEN_STEP, depthStep: DEPTH_STEP,
       maxLeaves: MAX_LEAVES,
+      meta: { anc: anc.id, L, i, j },
     });
-    pendingView = v;
-    renderStart = performance.now();
-    inflight = true;
-    forceRender = false;
   }
 
-  renderer.h.onResult = (m) => {
-    if (m.kind === 'loop') { onLoopResult(m); return; }
-    inflight = false;
-    if (m.id !== renderId || !pendingView) { if (m.bitmap.close) m.bitmap.close(); return; }
-    if (buf.width !== m.w || buf.height !== m.h) { buf.width = m.w; buf.height = m.h; }
-    bufCtx.setTransform(1, 0, 0, 1, 0, 0);
-    bufCtx.clearRect(0, 0, m.w, m.h);
-    bufCtx.drawImage(m.bitmap, 0, 0);
-    if (m.bitmap.close) m.bitmap.close();
-    bufView = pendingView;
-    pendingView = null;
-    lastLeaves = m.leaves;
-    renderMs = renderMs * 0.6 + (performance.now() - renderStart) * 0.4;
+  function onTileResult(m) {
+    tileInflight.delete(m.key);
+    if (m.gen !== tileGen || tiles.has(m.key)) { m.bitmap.close && m.bitmap.close(); return; }
+    const [ancId, L, i, j] = m.key.split('|').map(Number);
+    const anc = anchors.find(a => a.id === ancId);
+    if (!anc) { m.bitmap.close && m.bitmap.close(); return; }
+    tiles.set(m.key, { anc, L, i, j, bmp: m.bitmap });
+    // 오래 안 보인 타일부터 버림
+    while (tiles.size + staleTiles.length > MAX_TILES) {
+      if (staleTiles.length) { const t = staleTiles.shift(); t.bmp.close && t.bmp.close(); continue; }
+      const [k, t] = tiles.entries().next().value;
+      tiles.delete(k); t.bmp.close && t.bmp.close();
+    }
     dirty = true;
+  }
+
+  // 이번 프레임에 필요한 타일 계산 + 요청
+  function tilesTick() {
+    const amag = Math.hypot(anchor.ar, anchor.ai);
+    const [cgx, cgy] = gridFromFrame(anchor, cam.x, cam.y);
+    // 앵커가 너무 멀어지거나 배율 차이가 커지면 새 앵커 (정밀도 유지)
+    if (amag > 4096 || amag < 1 / 4096 || Math.hypot(cgx, cgy) * amag > 64) {
+      newAnchor();
+      return tilesTick();
+    }
+    const pg = Math.hypot(anchor.ar, anchor.ai) * cam.s * view.DPR;   // 기기 px / 격자 단위
+    const L = Math.round(Math.log2(pg / TILE));
+    // 화면 네 모서리 → 격자 좌표 범위
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const [sx, sy] of [[0, 0], [view.W, 0], [0, view.H], [view.W, view.H]]) {
+      const [fx, fy] = screenToFrame(sx, sy);
+      const [gx, gy] = gridFromFrame(anchor, fx, fy);
+      minX = Math.min(minX, gx); maxX = Math.max(maxX, gx);
+      minY = Math.min(minY, gy); maxY = Math.max(maxY, gy);
+    }
+    const listFor = (Lx, margin) => {
+      const u = Math.pow(2, -Lx);
+      const i0 = Math.floor(minX / u) - margin, i1 = Math.floor(maxX / u) + margin;
+      const j0 = Math.floor(minY / u) - margin, j1 = Math.floor(maxY / u) + margin;
+      const out = [];
+      if ((i1 - i0 + 1) * (j1 - j0 + 1) > 600) return out;
+      for (let i = i0; i <= i1; i++) for (let j = j0; j <= j1; j++) {
+        out.push({ L: Lx, i, j, key: `${anchor.id}|${Lx}|${i}|${j}`, d: Math.hypot((i + 0.5) * u - cgx, (j + 0.5) * u - cgy) });
+      }
+      return out;
+    };
+    const touch = (n) => { const t = tiles.get(n.key); if (t) { tiles.delete(n.key); tiles.set(n.key, t); } return t; };
+    // 1) 한 단계 큰 타일(개수 1/4)로 화면+주변을 먼저 빠르게 덮고  2) 그다음 화면 해상도 타일
+    const coarse = listFor(L - 1, 1);
+    const need = listFor(L, 0);
+    tileNeed = need.length;
+    tileHave = 0;
+    for (const n of need) if (touch(n)) tileHave++;
+    coverageComplete = tileHave === tileNeed && tileNeed > 0;
+    const todo = [];
+    const coarseMissing = coarse.filter(n => !touch(n) && !tileInflight.has(n.key)).sort((p, q) => p.d - q.d);
+    const fineMissing = need.filter(n => !tiles.has(n.key) && !tileInflight.has(n.key)).sort((p, q) => p.d - q.d);
+    // 화면 안쪽 큰 타일 → 화면 해상도 타일 → 화면 밖 여유 큰 타일
+    const u1 = Math.pow(2, -(L - 1));
+    const inView = (n) => (n.i + 1) * u1 > minX && n.i * u1 < maxX && (n.j + 1) * u1 > minY && n.j * u1 < maxY;
+    todo.push(...coarseMissing.filter(inView), ...fineMissing, ...coarseMissing.filter(n => !inView(n)));
+    for (const n of todo) {
+      const w = pool.idle(2);
+      if (!w) break;
+      requestTile(w, n.L, n.i, n.j, n.key);
+    }
+  }
+
+  pool.h.onResult = (m) => {
+    if (m.kind === 'loop') onLoopResult(m);
+    else if (m.kind === 'tile') onTileResult(m);
   };
 
-  function needsRender() {
-    if (forceRender || !bufView) return true;
-    const r = cam.s / bufView.s;
-    const autoOut = !paused && autoMode === 'out', autoIn = !paused && autoMode === 'in';
-    if ((r > 1.25 && !autoOut) || (autoOut && r > 2)) return true;   // 축소 중엔 미리 작게 그려 둔 걸 쓰므로 확대 쪽 검사 완화
-    if (r < 0.8 && !(autoIn && r > 0.5)) return true;
-    const side = buf.width;
-    const off = Math.hypot(cam.x - bufView.x, cam.y - bufView.y) * cam.s * view.DPR;
-    const halfDiag = Math.hypot(view.W, view.H) / 2 * view.DPR;
-    return off + halfDiag > (side / 2) * r * 0.97;
-  }
-
-  function composite() {
+  // 타일 합성: 큰(거친) 타일부터 그리고 작은(세밀한) 타일로 덮음
+  function compositeTiles() {
+    const DPR = view.DPR;
     tCtx.setTransform(1, 0, 0, 1, 0, 0);
     tCtx.clearRect(0, 0, trail.width, trail.height);
-    if (!bufView) return;
-    const DPR = view.DPR;
+    const list = [];
+    const halfDiag = Math.hypot(view.W, view.H) / 2;
+    const addAll = (arr, stale) => {
+      for (const t of arr) {
+        const u = Math.pow(2, -t.L);
+        const amag = Math.hypot(t.anc.ar, t.anc.ai);
+        const side = u * amag * cam.s;                  // 화면 CSS px
+        if (side < 6) continue;
+        const gx = (t.i + 0.5) * u, gy = (t.j + 0.5) * u;
+        const fx = t.anc.ar * gx - t.anc.ai * gy + t.anc.br, fy = t.anc.ar * gy + t.anc.ai * gx + t.anc.bi;
+        const dist = Math.hypot(fx - cam.x, fy - cam.y) * cam.s;
+        if (dist > halfDiag + side) continue;           // 화면 밖
+        list.push({ t, side, stale });
+      }
+    };
+    addAll(staleTiles, true);
+    addAll(tiles.values(), false);
+    list.sort((p, q) => (p.stale !== q.stale ? (p.stale ? -1 : 1) : q.side - p.side));
     tCtx.imageSmoothingEnabled = true;
-    tCtx.imageSmoothingQuality = cam.s < bufView.s ? 'high' : 'low';
-    tCtx.setTransform(DPR, 0, 0, DPR, 0, 0);
-    tCtx.translate(view.W / 2, view.H / 2);
-    tCtx.rotate(cam.rot);
-    tCtx.scale(cam.s, cam.s);
-    tCtx.translate(-cam.x, -cam.y);
-    // 버퍼 픽셀 → 프레임 좌표
-    tCtx.translate(bufView.x, bufView.y);
-    tCtx.rotate(-bufView.rot);
-    const inv = 1 / (bufView.s * DPR);
-    tCtx.scale(inv, inv);
-    tCtx.translate(-buf.width / 2, -buf.height / 2);
-    tCtx.drawImage(buf, 0, 0);
+    let curAnc = null;
+    for (const { t, side } of list) {
+      if (t.anc !== curAnc) {
+        curAnc = t.anc;
+        tCtx.setTransform(DPR, 0, 0, DPR, 0, 0);
+        tCtx.translate(view.W / 2, view.H / 2);
+        tCtx.rotate(cam.rot);
+        tCtx.scale(cam.s, cam.s);
+        tCtx.translate(-cam.x, -cam.y);
+        tCtx.transform(curAnc.ar, curAnc.ai, -curAnc.ai, curAnc.ar, curAnc.br, curAnc.bi);
+      }
+      tCtx.imageSmoothingQuality = side * DPR < TILE ? 'high' : 'low';
+      const u = Math.pow(2, -t.L);
+      // 약간 겹치게 그려 타일 사이 틈 방지
+      const e = u * 0.002;
+      tCtx.drawImage(t.bmp, TMARGIN, TMARGIN, TILE, TILE, t.i * u - e, t.j * u - e, u + 2 * e, u + 2 * e);
+    }
     tCtx.setTransform(1, 0, 0, 1, 0, 0);
   }
 
@@ -498,7 +612,7 @@
   function goHome() {
     zoomOffset = 0; looping = false; loop.hold = false; loop.n = 0;
     frame.level = 12; frame.bits = []; frame.cnt = [0]; frame.firstOne = -1;
-    bufView = null; pendingView = null; renderId++; inflight = false;
+    clearTiles();
     // 왼쪽 사슬 12세대 선분 (0,0)→(1,0)의 곡선 범위를 계산해서 화면에 맞춤
     const pts = [];
     (function d(ax, ay, bx, by, sig, lv) {
@@ -518,7 +632,7 @@
     cam.y = (minY + maxY) / 2;
     absZoom0 = absZoom();
     rebase();
-    forceRender = true; dirty = true;
+    dirty = true;
   }
 
   function rightInset() {
@@ -555,7 +669,7 @@
     looping = true;
     // 왼쪽 사슬(시작점에서 무한히 커지는 선분들) 위의 프레임, 시작점 = (0,0)
     frame.level = 0; frame.bits = []; frame.cnt = [0]; frame.firstOne = -1;
-    bufView = null; pendingView = null; renderId++; inflight = false;
+    clearTiles();
     loop.s0 = Math.min(view.W, view.H) * 0.45;
     // 현재 배율의 소수 부분은 이어 가고, 정수 부분은 표시용으로만 기억
     const z = absZoom() + zoomOffset;
@@ -577,7 +691,6 @@
     zoomOffset += loop.n;
     loop.n = 0;
     loop.hold = loop.ready;
-    forceRender = true;
     rebase();
     dirty = true;
   }
@@ -602,7 +715,7 @@
     loop.inflight = true;
     loop.pendingKey = loopKey();
     loop.q = q;
-    renderer.post({
+    pool.post(pool.idle(99), {
       id: loop.reqId, kind: 'loop', w: side, h: side, relGen: true,
       root: { ax, ay, bx, by, sign: root.sign, level: root.level, count: root.count, H: root.H },
       gs, thr: leafPx * view.DPR * q, radius: RADIUS, pad: 6 * view.DPR,
@@ -708,10 +821,10 @@
           cam.x += (tx - ccx) * k; cam.y += (ty - ccy) * k;
         }
       }
-      if (needsRender()) requestRender();
-      if (loop.hold && bufView) loop.hold = false;
+      tilesTick();
+      if (loop.hold && coverageComplete) { loop.hold = false; dirty = true; }
       if (loop.hold) compositeLoop();
-      else if (dirty) { composite(); dirty = false; }
+      else if (dirty) { compositeTiles(); dirty = false; }
     }
     drawCrosshair();
     updateHud();
@@ -744,13 +857,16 @@
   let hudKey = '';
   function updateHud() {
     const z = absZoom() + zoomOffset + (looping ? loop.n : 0) - absZoom0;
-    const key = z.toFixed(1) + '|' + lastLeaves + '|' + autoMode + paused + color.paletteKey + color.seed;
+    const info = looping || loop.hold
+      ? (loop.ready ? `루프 그림 선 ${lastLeaves.toLocaleString('ko-KR')}개` : '루프 그림 그리는 중…')
+      : (coverageComplete ? `타일 ${tileHave}개 완료` : `타일 ${tileHave}/${tileNeed} 그리는 중…`);
+    const key = z.toFixed(1) + '|' + info + '|' + autoMode + paused + color.paletteKey + color.seed;
     if (key === hudKey) return;
     hudKey = key;
     const zz = Math.abs(z) < 0.05 ? 0 : z;
     elZoom.textContent = zz === 0 ? '×1' : zz > 0 ? `×2^${zz.toFixed(1)}` : `÷2^${(-zz).toFixed(1)}`;
     elZoom.style.color = color.colors[Math.floor(((zz * 0.05) % 1 + 1) % 1 * K)];
-    elLeaves.textContent = lastLeaves.toLocaleString('ko-KR');
+    elLeaves.textContent = info;
     elStatus.textContent = paused || autoMode === 'stop' ? '멈춤' : autoMode === 'in' ? '계속 확대 중' : '계속 축소 중';
   }
 
@@ -791,7 +907,7 @@
   leafIn.addEventListener('input', () => {
     leafLabel.textContent = leafIn.value + 'px';
     clearTimeout(leafTimer);
-    leafTimer = setTimeout(() => { leafPx = parseFloat(leafIn.value); forceRender = true; loop.key = ''; syncUrl(); }, 100);
+    leafTimer = setTimeout(() => { leafPx = parseFloat(leafIn.value); invalidateTiles(); loop.key = ''; syncUrl(); }, 100);
   });
 
   const setDirSeg = NK.bindSeg(document.getElementById('dirSeg'), 'dir', d => {
@@ -806,11 +922,11 @@
     gen: '세대 모드처럼, 어느 세대에서 복사된 부분인지에 따라 색이 정해져요.',
   };
   const setCmSeg = NK.bindSeg(document.getElementById('colorModeSeg'), 'cm', cm => {
-    colorMode = cm; setCmSeg(cm); cmHint.textContent = CM_HINT[cm]; forceRender = true; loop.key = ''; syncUrl();
+    colorMode = cm; setCmSeg(cm); cmHint.textContent = CM_HINT[cm]; invalidateTiles(); loop.key = ''; syncUrl();
   });
 
   NK.bindColorControls(color, { palette: 'paletteSel', gradBar: 'gradBar', seed: 'seedInput', reseed: 'btnReseed' }, () => {
-    forceRender = true; loop.key = ''; syncUrl();
+    invalidateTiles(); loop.key = ''; syncUrl();
   });
 
   document.getElementById('btnHome').addEventListener('click', goHome);
