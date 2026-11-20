@@ -16,6 +16,43 @@
   const RERENDER_ZOOM = 1.25;      // 버퍼 대비 이만큼 확대/축소되면 선명하게 다시 그림
 
   // ---------------------------------------------------------
+  // 선 스타일 (모든 페이지 공통, 브라우저에 저장)
+  // core: 선 심지 굵기(화면 px), glow: 번짐 세기(0~2)
+  // ---------------------------------------------------------
+  const STYLE_KEY = 'neon-lines-style';
+  const lineStyle = { core: 1.8, glow: 1 };
+  try { Object.assign(lineStyle, JSON.parse(localStorage.getItem(STYLE_KEY) || '{}')); } catch (e) { /* 저장소 없음 */ }
+  const styleListeners = [];
+  function setLineStyle(patch) {
+    Object.assign(lineStyle, patch);
+    try { localStorage.setItem(STYLE_KEY, JSON.stringify(lineStyle)); } catch (e) { /* */ }
+    styleListeners.forEach(f => f(lineStyle));
+  }
+
+  // 네온관처럼 4겹으로 긋기: 넓은 번짐 → 중간 번짐 → 심지(색) → 가운데 하이라이트(흰빛)
+  // items: [{ path, color }], scale: 좌표 1 = 기기 px 몇 개, st: { core, glow, dpr }
+  function neonStroke(ctx, items, scale, st) {
+    const px = (v) => (v * st.dpr) / scale;
+    const passes = [
+      { w: 8, a: 0.09 * st.glow, white: false },
+      { w: 3.6, a: 0.18 * st.glow, white: false },
+      { w: st.core, a: 1, white: false },
+      { w: Math.max(0.5, st.core * 0.42), a: 0.5, white: true },
+    ];
+    for (const p of passes) {
+      if (p.a <= 0.001) continue;
+      if (p.white && st.core < 1.1) continue;
+      ctx.globalAlpha = Math.min(1, p.a);
+      ctx.lineWidth = px(p.w);
+      for (const it of items) {
+        ctx.strokeStyle = p.white ? '#ffffff' : it.color;
+        ctx.stroke(it.path);
+      }
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  // ---------------------------------------------------------
   // 팔레트
   // ---------------------------------------------------------
   const PALETTES = {
@@ -234,15 +271,9 @@
       ctx.setTransform(m.s, 0, 0, m.s, m.w / 2 - m.cx * m.s, m.h / 2 - m.cy * m.s);
       ctx.lineCap = 'round';
       ctx.lineJoin = 'round';
-      for (let pass = 0; pass < 2; pass++) {
-        ctx.globalAlpha = pass === 0 ? 0.16 : 0.95;
-        ctx.lineWidth = (pass === 0 ? m.glow : m.core) / m.s;
-        for (let k = 0; k < K; k++) {
-          ctx.strokeStyle = colors[k];
-          ctx.stroke(paths[k]);
-        }
-      }
-      ctx.globalAlpha = 1;
+      const items = [];
+      for (let k = 0; k < K; k++) if (count) items.push({ path: paths[k], color: colors[k] });
+      neonStroke(ctx, items, m.s, m.style);
       const bitmap = canvas.transferToImageBitmap ? canvas.transferToImageBitmap() : canvas;
       const out = { type: 'rendered', id: m.id, gen: m.gen, cx: m.cx, cy: m.cy, s: m.s, w: m.w, h: m.h, upTo: count, bitmap };
       if (canvas.transferToImageBitmap) port.postMessage(out, [bitmap]);
@@ -279,7 +310,7 @@
     const handlers = { onResult: null };
     try {
       if (typeof OffscreenCanvas === 'undefined' || !OffscreenCanvas.prototype.transferToImageBitmap) throw new Error('no offscreen');
-      const src = zoneFactory.toString() + '\n(' + rendererMain.toString() +
+      const src = zoneFactory.toString() + '\n' + neonStroke.toString() + '\n(' + rendererMain.toString() +
         ')(zoneFactory, self, (w, h) => new OffscreenCanvas(w, h));';
       const w = new Worker(URL.createObjectURL(new Blob([src], { type: 'text/javascript' })));
       w.onmessage = (e) => handlers.onResult && handlers.onResult(e.data);
@@ -337,6 +368,7 @@
       this.renderer.handlers.onResult = (m) => this._onResult(m);
 
       this._bindInput();
+      styleListeners.push(() => { this.forceRender = true; });
       window.addEventListener('resize', () => this.resize());
       this.resize();
       this.sendConfig();
@@ -394,7 +426,11 @@
     bufferSize() {
       const wd = this.W * this.DPR, hd = this.H * this.DPR;
       const m = Math.max(1.3, Math.min(BUF_MARGIN, Math.sqrt(BUF_MAX_PIXELS / (wd * hd))));
-      return [Math.min(16000, Math.round(wd * m)), Math.min(16000, Math.round(hd * m))];
+      let w = Math.min(16000, Math.round(wd * m)), h = Math.min(16000, Math.round(hd * m));
+      // 화면 캔버스와 짝·홀을 맞춰서, 멈췄을 때 버퍼가 정확히 정수 픽셀에 놓이게
+      if ((w - this.trail.width) % 2) w--;
+      if ((h - this.trail.height) % 2) h--;
+      return [w, h];
     }
 
     requestRender() {
@@ -405,8 +441,9 @@
       this.renderer.post({
         type: 'render', id: ++this.renderId, gen: this.gen,
         cx: t.x, cy: t.y, s: t.s * this.DPR, w, h,
-        glow: GLOW_PX * this.DPR, core: CORE_PX * this.DPR,
+        style: { core: lineStyle.core, glow: lineStyle.glow, dpr: this.DPR },
       });
+      this.lastRenderView = { x: t.x, y: t.y, s: t.s };
       this.inflight = true;
       this.forceRender = false;
     }
@@ -454,16 +491,9 @@
       // 조금씩 덧그릴 땐 끝을 둥글게 하지 않음: 앞에 그린 선 끝과 겹쳐 밝은 점이 생기지 않게
       ctx.lineCap = 'butt';
       ctx.lineJoin = 'round';
-      for (let pass = 0; pass < 2; pass++) {
-        ctx.globalAlpha = pass === 0 ? 0.16 : 0.95;
-        ctx.lineWidth = (pass === 0 ? GLOW_PX : CORE_PX) * this.DPR / s;
-        for (let k = 0; k < K; k++) {
-          if (!tmp[k]) continue;
-          ctx.strokeStyle = this.color.colors[k];
-          ctx.stroke(tmp[k]);
-        }
-      }
-      ctx.globalAlpha = 1;
+      const items = [];
+      for (let k = 0; k < K; k++) if (tmp[k]) items.push({ path: tmp[k], color: this.color.colors[k] });
+      neonStroke(ctx, items, s, { core: lineStyle.core, glow: lineStyle.glow, dpr: this.DPR });
       this.bufUpTo = st.n;
       this.bufVersion = (this.bufVersion || 0) + 1;
       this.dirty = true;
@@ -494,6 +524,16 @@
       ctx.clearRect(0, 0, this.trail.width, this.trail.height);
       if (!this.bufCam) return;
       const k = (this.cam.s * this.DPR) / this.bufCam.s;
+      const b = this.bufCam;
+      const offX = (b.x - this.cam.x) * this.cam.s * this.DPR, offY = (b.y - this.cam.y) * this.cam.s * this.DPR;
+      if (Math.abs(k - 1) < 1e-9) {
+        // 배율이 같으면 늘리지 않고 정수 픽셀 위치에 그대로 찍음 (흐려지지 않음)
+        const dx = Math.round((this.trail.width - b.w) / 2 + offX), dy = Math.round((this.trail.height - b.h) / 2 + offY);
+        ctx.imageSmoothingEnabled = false;
+        ctx.drawImage(this.buf, dx, dy);
+        ctx.imageSmoothingEnabled = true;
+        return;
+      }
       ctx.imageSmoothingEnabled = true;
       ctx.imageSmoothingQuality = k < 1 ? 'high' : 'low';
       this.setWorldTransform(ctx);
@@ -583,6 +623,19 @@
     tick(dt, now, opts = {}) {
       this.updateCameraTarget();
       this.stepCamera(dt);
+      // 카메라가 잠깐 멈추면, 지금 배율·위치 그대로 정확히 다시 그려 선명하게
+      const c = this.cam, pc = this._prevCam || (this._prevCam = { x: NaN, y: NaN, s: NaN });
+      if (c.x !== pc.x || c.y !== pc.y || c.s !== pc.s) { this._lastMove = now; pc.x = c.x; pc.y = c.y; pc.s = c.s; }
+      else if (now - (this._lastMove || 0) > 150 && this.bufCam && !this.inflight && !this.forceRender && !this.bufStale) {
+        const b = this.bufCam;
+        const k = (c.s * this.DPR) / b.s;
+        const offX = (b.x - c.x) * c.s * this.DPR, offY = (b.y - c.y) * c.s * this.DPR;
+        const fracX = Math.abs(((this.trail.width - b.w) / 2 + offX) % 1), fracY = Math.abs(((this.trail.height - b.h) / 2 + offY) % 1);
+        if (Math.abs(k - 1) > 1e-9 || (fracX > 0.02 && fracX < 0.98) || (fracY > 0.02 && fracY < 0.98)) {
+          this.target.x = c.x; this.target.y = c.y; this.target.s = c.s;
+          this.forceRender = true;
+        }
+      }
       this.drawNewIntoBuf(opts.maxDirect);
       if (this.needsRender()) this.requestRender();
       else if (!this.inflight && this.sentUpTo < this.store.n && now - this.lastFlush > 250) {
@@ -744,6 +797,7 @@
     const panel = document.getElementById('panel');
     const btn = document.getElementById('panelToggle');
     if (panel && btn) btn.addEventListener('click', () => panel.classList.toggle('collapsed'));
+    bindLineStyle();
     // 좁은 화면(모바일)에서는 그림이 보이도록 접은 채로 시작
     if (panel && window.innerWidth <= 720) panel.classList.add('collapsed');
   }
@@ -754,6 +808,37 @@
     return (t.tagName === 'INPUT' && t.type !== 'range' && t.type !== 'checkbox') || t.tagName === 'SELECT';
   }
 
+  // 선 굵기·번짐 슬라이더를 패널 맨 아래에 붙임 (모든 페이지 공통)
+  function bindLineStyle() {
+    const body = document.querySelector('#panel .panel-body');
+    if (!body) return;
+    const sec = document.createElement('section');
+    sec.innerHTML = `
+      <label class="label">선 굵기 <span class="value" id="lsCoreLabel"></span></label>
+      <input id="lsCore" type="range" min="0.6" max="4" step="0.1">
+      <label class="label" style="margin-top:12px">번짐 <span class="value" id="lsGlowLabel"></span></label>
+      <input id="lsGlow" type="range" min="0" max="2" step="0.05">
+      <div class="hint">모든 페이지에 똑같이 적용되고, 이 브라우저에 기억돼요.</div>`;
+    body.appendChild(sec);
+    const core = sec.querySelector('#lsCore'), glow = sec.querySelector('#lsGlow');
+    const cl = sec.querySelector('#lsCoreLabel'), gl = sec.querySelector('#lsGlowLabel');
+    const sync = () => {
+      core.value = lineStyle.core; glow.value = lineStyle.glow;
+      cl.textContent = lineStyle.core.toFixed(1) + 'px';
+      gl.textContent = Math.round(lineStyle.glow * 100) + '%';
+    };
+    let t = 0;
+    const apply = () => {
+      cl.textContent = parseFloat(core.value).toFixed(1) + 'px';
+      gl.textContent = Math.round(parseFloat(glow.value) * 100) + '%';
+      clearTimeout(t);
+      t = setTimeout(() => setLineStyle({ core: parseFloat(core.value), glow: parseFloat(glow.value) }), 120);
+    };
+    core.addEventListener('input', apply);
+    glow.addEventListener('input', apply);
+    sync();
+  }
+
   const easeInOut = t => t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
 
   global.NeonKit = {
@@ -762,5 +847,6 @@
     ColorState, SegStore, NeonView,
     toast, bindSeg, bindColorControls, readParams, writeParams, colorFromParams,
     bindPanelToggle, isTyping, easeInOut,
+    lineStyle, setLineStyle, onLineStyle: (f) => styleListeners.push(f), bindLineStyle, neonStroke,
   };
 })(window);

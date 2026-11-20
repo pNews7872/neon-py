@@ -13,6 +13,7 @@
   'use strict';
   const NK = window.NeonKit;
   const K = NK.K;
+  const neonStroke = NK.neonStroke;   // 워커가 없을 때(메인 스레드) 쓰는 같은 함수
 
   const RADIUS = 0.92;          // 선분 AB의 하위 곡선은 중점에서 |AB|×0.8972 안에 있음 (+여유)
   const EXTRA_LEVELS = 6;       // 화면을 감싸는 조상보다 이만큼 더 올라가서 그리기 시작 (빠짐 방지)
@@ -231,16 +232,9 @@
       } else {
         ctx.lineCap = 'round';
         ctx.lineJoin = 'round';
-        for (let pass = 0; pass < 2; pass++) {
-          ctx.globalAlpha = pass === 0 ? 0.16 : 0.95;
-          ctx.lineWidth = pass === 0 ? m.glow : m.core;
-          for (let k = 0; k < K; k++) {
-            if (!paths[k]) continue;
-            ctx.strokeStyle = m.colors[k];
-            ctx.stroke(paths[k]);
-          }
-        }
-        ctx.globalAlpha = 1;
+        const items = [];
+        for (let k = 0; k < K; k++) if (paths[k]) items.push({ path: paths[k], color: m.colors[k] });
+        neonStroke(ctx, items, 1, m.style);
       }
       const bitmap = canvas.transferToImageBitmap ? canvas.transferToImageBitmap() : canvas;
       const out = { id: m.id, kind: m.kind, key: m.key, gen: m.gen, leaves, bitmap, w: m.w, h: m.h };
@@ -254,7 +248,7 @@
     const workers = [];
     try {
       if (typeof OffscreenCanvas === 'undefined' || !OffscreenCanvas.prototype.transferToImageBitmap) throw new Error('no offscreen');
-      const src = '(' + infRenderer.toString() + ')(self, (w, h) => new OffscreenCanvas(w, h));';
+      const src = NK.neonStroke.toString() + '\n(' + infRenderer.toString() + ')(self, (w, h) => new OffscreenCanvas(w, h));';
       const url = URL.createObjectURL(new Blob([src], { type: 'text/javascript' }));
       const n = Math.max(1, Math.min(6, (navigator.hardwareConcurrency || 4) - 1));
       for (let i = 0; i < n; i++) {
@@ -393,7 +387,7 @@
       id: 0, kind: 'tile', key, gen: tileGen, opaque: true, w: TW, h: TW,
       root: { ax, ay, bx, by, sign: root.sign, level: root.level, count: root.count, H: root.H },
       gs, thr: leafPx * view.DPR, radius: RADIUS, pad: 6 * view.DPR,
-      glow: 5 * view.DPR, core: 1.3 * view.DPR,
+      style: { core: NK.lineStyle.core, glow: NK.lineStyle.glow, dpr: view.DPR },
       colors: color.colors, colorsRgb: color.rgb, mode: colorMode, genStep: GEN_STEP, depthStep: DEPTH_STEP,
       maxLeaves: MAX_LEAVES,
       meta: { anc: anc.id, L, i, j },
@@ -719,7 +713,7 @@
       id: loop.reqId, kind: 'loop', w: side, h: side, relGen: true,
       root: { ax, ay, bx, by, sign: root.sign, level: root.level, count: root.count, H: root.H },
       gs, thr: leafPx * view.DPR * q, radius: RADIUS, pad: 6 * view.DPR,
-      glow: 5 * view.DPR, core: 1.3 * view.DPR,
+      style: { core: NK.lineStyle.core, glow: NK.lineStyle.glow, dpr: view.DPR * q },
       colors: color.colors, colorsRgb: color.rgb, mode: colorMode, genStep: GEN_STEP, depthStep: DEPTH_STEP,
       maxLeaves: MAX_LEAVES,
     });
@@ -808,7 +802,8 @@
   // 해상도는 기기에 맞춰 정하고, 촘촘함을 최대로 낮춰도 버거울 때만 한 번 낮춘다.
   const qFix = parseInt(params.get('q'), 10);           // 테스트용: 품질 고정 (0 = 최고)
   const BOOST_MAX = 3;
-  let resScale = IS_MOBILE ? 0.75 : 1;
+  // 데스크톱에서 화면 배율이 낮으면(1~1.5) 1.25배로 크게 그려 줄여 보여줌(슈퍼샘플링)
+  let resScale = IS_MOBILE ? 0.75 : (window.devicePixelRatio || 1) < 1.75 ? 1.25 : 1;
   let boost = 1, boostTarget = Number.isFinite(qFix) ? Math.pow(1.25, Math.max(0, qFix)) : (IS_MOBILE ? 1.25 : 1);
   boost = boostTarget;
   const frameTimes = [];
@@ -825,7 +820,8 @@
     let avg20 = 0; for (let i = frameTimes.length - 20; i < frameTimes.length; i++) avg20 += frameTimes[i] / 20;
     const avgAll = frameTimes.reduce((x, y) => x + y, 0) / frameTimes.length;
     if (now - lastQChange > 700 && avg20 > refresh * 1.5) {
-      if (boostTarget < BOOST_MAX) boostTarget = Math.min(BOOST_MAX, boostTarget * 1.25);
+      if (resScale > 1) resScale = 1;                      // 먼저 슈퍼샘플링부터 끔
+      else if (boostTarget < BOOST_MAX) boostTarget = Math.min(BOOST_MAX, boostTarget * 1.25);
       else if (resScale > 0.5) resScale = Math.max(0.5, resScale * 0.85);
       lastQChange = now; blockUpUntil = now + 15000; frameTimes.length = 0;
     } else if (now - lastQChange > 3000 && now > blockUpUntil && avgAll < refresh * 1.12 && boostTarget > 1) {
@@ -833,7 +829,7 @@
       lastQChange = now; frameTimes.length = 0;
     }
   }
-  const qualityPct = () => Math.round((resScale / boost) * 100);
+  const qualityPct = () => Math.round((Math.min(1, resScale) / boost) * 100);
 
   function glFrame() {
     const q = { scale: resScale, boost };
@@ -894,9 +890,13 @@
     // 지오모핑: 인스턴스 길이가 Lmin→√2·Lmin 로 커지는 동안 마지막 접힘 0→100%
     const t = tL > 0 ? Math.min(1, Math.max(0, 2 * Math.log2(tL / Lmin))) : 0;
     glSegs = (instCnt[0] + instCnt[1]) * (1 << TPL_K);
+    // 선 굵기: 설정값(화면 px)이지만, 선 간격(leaf)보다 굵으면 촘촘한 곳이 뭉개지므로 간격의 45%까지만
+    const coreGL = NK.lineStyle.core * view.DPR * q.scale;
+    const widthGL = Math.max(1, Math.min(coreGL, leaf * 0.45));
     glr.render(instBuf, instCnt, {
       t, mode: colorMode === 'gen' ? 0 : 1, genStep: GEN_STEP, depthStep: DEPTH_STEP,
-      intensity: 0.9, bloom: 0.32, exposure: 1.25,
+      intensity: 0.95, bloom: 0.34 * NK.lineStyle.glow, exposure: 1.3,
+      halfW: widthGL / 2, hot: widthGL >= 1.6 ? 1 : 0,
     });
   }
 
@@ -1099,6 +1099,7 @@
 
   document.getElementById('btnHome').addEventListener('click', goHome);
   NK.bindPanelToggle();
+  NK.onLineStyle(() => { invalidateTiles(); loop.key = ''; });
 
   function syncUrl() {
     const p = { seed: color.seed, pal: color.paletteKey, cm: colorMode, dir: gs < 0 ? 'ccw' : 'cw', auto: autoMode, leaf: leafPx };

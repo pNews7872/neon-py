@@ -6,29 +6,42 @@
    · 지오모핑: 템플릿의 마지막 접힘을 0~100% 로 연속 조절 → 세대 경계가 보이지 않음.
      (선분이 √2 배 커질 때 마지막 접힘 0→100%, 그 순간 인스턴스가 둘로 나뉘며 접힘은 다시 0%:
       두 상태가 정확히 같은 그림이라 이음매가 없다)
-   · 가산 혼합(HDR) + MSAA → 듀얼 카와세 블룸(네온 번짐) → 색 보존 톤매핑
+   · 굵기 있는 선(셰이더 안티에일리어싱, 겹침은 MAX 혼합) → 듀얼 카와세 블룸(네온 번짐) → 색 보존 톤매핑
    ========================================================= */
 (function (global) {
   'use strict';
 
+  // 선 하나 = 사각형 2개(삼각형). 가장자리를 셰이더에서 부드럽게 깎아 굵기를 자유롭게.
   const VS_LINE = `#version 300 es
-layout(location=0) in vec2 aP1;      // 템플릿: 완전히 접힌 위치
-layout(location=1) in vec2 aP0;      // 템플릿: 마지막 단계를 펴 둔 위치
+layout(location=0) in vec4 aE1;      // 템플릿 선분 양 끝 (완전히 접힌 위치) a.xy b.zw
+layout(location=1) in vec4 aE0;      // 템플릿 선분 양 끝 (마지막 단계를 펴 둔 위치)
 layout(location=2) in vec2 aSeg;     // x: 첫 오른쪽 접힘까지 단계 수, y: 오른쪽 접힘 횟수
-layout(location=3) in vec4 aInst;    // 인스턴스 선분 A(x,y) B(x,y) (화면 px)
-layout(location=4) in vec3 aInstC;   // x: 세대 색 위상(이미 정해졌으면, 아니면 -1), y: 인스턴스 레벨 위상, z: 접힘 수 위상
+layout(location=3) in vec2 aCorner;  // x: 0=시작 끝 1=끝 쪽, y: −1/+1 옆
+layout(location=5) in vec4 aInst;    // 인스턴스 선분 A(x,y) B(x,y) (화면 px)
+layout(location=6) in vec3 aInstC;   // x: 세대 색 위상(정해졌으면, 아니면 −1), y: 레벨 위상, z: 접힘 수 위상
 uniform float uT;
 uniform vec2 uRes;
 uniform int uMode;
 uniform float uGenStep;
 uniform float uDepthStep;
+uniform float uHalfW;
 flat out float vPhase;
+out float vDist;
+vec2 place(vec2 q) {
+  vec2 a = aInst.xy, d = aInst.zw - aInst.xy;
+  return a + q.x * d + q.y * vec2(-d.y, d.x);
+}
 void main() {
-  vec2 q = mix(aP0, aP1, uT);
-  vec2 a = aInst.xy;
-  vec2 d = aInst.zw - aInst.xy;
-  vec2 p = a + q.x * d + q.y * vec2(-d.y, d.x);
-  vec2 c = p / uRes * 2.0 - 1.0;
+  vec2 A = place(mix(aE0.xy, aE1.xy, uT));
+  vec2 B = place(mix(aE0.zw, aE1.zw, uT));
+  vec2 dir = B - A;
+  float len = length(dir);
+  vec2 u = len > 1e-6 ? dir / len : vec2(1.0, 0.0);
+  vec2 n = vec2(-u.y, u.x);
+  float ext = uHalfW + 1.0;                       // 가장자리 부드럽게 할 여유 1px
+  vec2 P = (aCorner.x < 0.5 ? A - u * uHalfW : B + u * uHalfW) + n * (aCorner.y * ext);
+  vDist = aCorner.y * ext;
+  vec2 c = P / uRes * 2.0 - 1.0;
   gl_Position = vec4(c.x, -c.y, 0.0, 1.0);
   float ph;
   if (uMode == 0) ph = aInstC.x >= 0.0 ? aInstC.x : fract(aInstC.y - aSeg.x * uGenStep);
@@ -39,12 +52,19 @@ void main() {
   const FS_LINE = `#version 300 es
 precision highp float;
 flat in float vPhase;
+in float vDist;
 uniform sampler2D uPal;
 uniform float uIntensity;
+uniform float uHalfW;
+uniform float uHot;
 out vec4 o;
 void main() {
+  float d = abs(vDist);
+  float a = clamp(uHalfW - d + 0.5, 0.0, 1.0);        // 가장자리 안티에일리어싱
   vec3 c = texture(uPal, vec2(vPhase, 0.5)).rgb;
-  o = vec4(c * uIntensity, 1.0);
+  float hot = uHot * (1.0 - smoothstep(0.0, max(0.6, uHalfW * 0.55), d));
+  c = mix(c, vec3(1.0), hot * 0.55);                 // 네온관 가운데 흰빛
+  o = vec4(c * uIntensity * a, 1.0);
 }`;
 
   const VS_FULL = `#version 300 es
@@ -114,12 +134,11 @@ void main() {
     return { p, u };
   }
 
-  // 템플릿: 선분 (0,0)→(1,0), 부호 sig, 자식 부호 (gs, −gs), 깊이 K
+  // 템플릿: 선분 (0,0)→(1,0), 부호 sig, 자식 부호 (gs, −gs), 깊이 K → 선 2^K개를 사각형으로
   function buildTemplate(K, sig, gs) {
     const N = 1 << K;
     const P1 = new Float64Array((N + 1) * 2);
-    let idx = 0;
-    P1[0] = 0; P1[1] = 0; idx = 1;
+    let idx = 1;
     (function d(ax, ay, bx, by, s, lv) {
       if (lv === 0) { P1[idx * 2] = bx; P1[idx * 2 + 1] = by; idx++; return; }
       const dx = bx - ax, dy = by - ay;
@@ -127,18 +146,26 @@ void main() {
       d(ax, ay, qx, qy, gs, lv - 1);
       d(qx, qy, bx, by, -gs, lv - 1);
     })(0, 0, 1, 0, sig, K);
-    const data = new Float32Array((N + 1) * 6);
-    for (let j = 0; j <= N; j++) {
-      const x1 = P1[j * 2], y1 = P1[j * 2 + 1];
-      let x0 = x1, y0 = y1;
-      if (j % 2 === 1) { x0 = (P1[j * 2 - 2] + P1[j * 2 + 2]) / 2; y0 = (P1[j * 2 - 1] + P1[j * 2 + 3]) / 2; }
-      // 이 꼭짓점에서 끝나는 선(번호 s = j−1)의 정보 (flat 변수는 선의 마지막 꼭짓점 값을 씀)
-      const s = Math.max(0, j - 1);
+    const P0 = new Float64Array(P1);
+    for (let j = 1; j < N; j += 2) {
+      P0[j * 2] = (P1[j * 2 - 2] + P1[j * 2 + 2]) / 2;
+      P0[j * 2 + 1] = (P1[j * 2 - 1] + P1[j * 2 + 3]) / 2;
+    }
+    const CORNERS = [[0, -1], [1, -1], [1, 1], [0, -1], [1, 1], [0, 1]];
+    const F = 12;                                 // 꼭짓점 하나에 float 12개
+    const data = new Float32Array(N * 6 * F);
+    let o = 0;
+    for (let s = 0; s < N; s++) {
       const offset = s === 0 ? K : K - 1 - Math.floor(Math.log2(s));
       let cnt = 0; for (let v = s; v; v &= v - 1) cnt++;
-      data.set([x1, y1, x0, y0, offset, cnt], j * 6);
+      for (const [ex, side] of CORNERS) {
+        data[o++] = P1[s * 2]; data[o++] = P1[s * 2 + 1]; data[o++] = P1[s * 2 + 2]; data[o++] = P1[s * 2 + 3];
+        data[o++] = P0[s * 2]; data[o++] = P0[s * 2 + 1]; data[o++] = P0[s * 2 + 2]; data[o++] = P0[s * 2 + 3];
+        data[o++] = offset; data[o++] = cnt;
+        data[o++] = ex; data[o++] = side;
+      }
     }
-    return { data, verts: N + 1, N };
+    return { data, verts: N * 6, N };
   }
 
   function create(canvas) {
@@ -184,12 +211,13 @@ void main() {
         gl.bindVertexArray(g.vao);
         gl.bindBuffer(gl.ARRAY_BUFFER, g.tpl);
         gl.bufferData(gl.ARRAY_BUFFER, t.data, gl.STATIC_DRAW);
-        gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 24, 0);
-        gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 2, gl.FLOAT, false, 24, 8);
-        gl.enableVertexAttribArray(2); gl.vertexAttribPointer(2, 2, gl.FLOAT, false, 24, 16);
+        gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 4, gl.FLOAT, false, 48, 0);
+        gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 4, gl.FLOAT, false, 48, 16);
+        gl.enableVertexAttribArray(2); gl.vertexAttribPointer(2, 2, gl.FLOAT, false, 48, 32);
+        gl.enableVertexAttribArray(3); gl.vertexAttribPointer(3, 2, gl.FLOAT, false, 48, 40);
         gl.bindBuffer(gl.ARRAY_BUFFER, g.inst);
-        gl.enableVertexAttribArray(3); gl.vertexAttribPointer(3, 4, gl.FLOAT, false, 28, 0); gl.vertexAttribDivisor(3, 1);
-        gl.enableVertexAttribArray(4); gl.vertexAttribPointer(4, 3, gl.FLOAT, false, 28, 16); gl.vertexAttribDivisor(4, 1);
+        gl.enableVertexAttribArray(5); gl.vertexAttribPointer(5, 4, gl.FLOAT, false, 28, 0); gl.vertexAttribDivisor(5, 1);
+        gl.enableVertexAttribArray(6); gl.vertexAttribPointer(6, 3, gl.FLOAT, false, 28, 16); gl.vertexAttribDivisor(6, 1);
         gl.bindVertexArray(null);
       });
     }
@@ -223,7 +251,7 @@ void main() {
       canvas.width = w; canvas.height = h;
       freeTargets();
       const sc = makeTex(w, h); sceneFbo = sc.fbo; sceneTex = sc.tex;
-      samples = Math.min(4, maxSamples);
+      samples = 0;   // 선 가장자리를 셰이더에서 부드럽게 하므로 MSAA 불필요 (메모리 절약)
       if (samples > 1) {
         msaaRb = gl.createRenderbuffer();
         gl.bindRenderbuffer(gl.RENDERBUFFER, msaaRb);
@@ -268,9 +296,12 @@ void main() {
       gl.viewport(0, 0, W, H);
       gl.clearColor(0, 0, 0, 1);
       gl.clear(gl.COLOR_BUFFER_BIT);
+      // 겹치는 곳은 더 밝은 쪽만 남김(MAX): 선 이음매·교차점에 밝은 점이 생기지 않게
       gl.enable(gl.BLEND);
-      gl.blendFunc(gl.ONE, gl.ONE);
+      gl.blendEquation(gl.MAX);
       gl.useProgram(pLine.p);
+      gl.uniform1f(pLine.u.uHalfW, opts.halfW);
+      gl.uniform1f(pLine.u.uHot, opts.hot);
       gl.uniform1f(pLine.u.uT, opts.t);
       gl.uniform2f(pLine.u.uRes, W, H);
       gl.uniform1i(pLine.u.uMode, opts.mode);
@@ -286,9 +317,10 @@ void main() {
         gl.bindVertexArray(g.vao);
         gl.bindBuffer(gl.ARRAY_BUFFER, g.inst);
         gl.bufferData(gl.ARRAY_BUFFER, inst[gi].subarray(0, counts[gi] * 7), gl.STREAM_DRAW);
-        gl.drawArraysInstanced(gl.LINE_STRIP, 0, g.verts, counts[gi]);
+        gl.drawArraysInstanced(gl.TRIANGLES, 0, g.verts, counts[gi]);
       }
       gl.bindVertexArray(emptyVao);
+      gl.blendEquation(gl.FUNC_ADD);
       gl.disable(gl.BLEND);
       if (msaaFbo) {
         gl.bindFramebuffer(gl.READ_FRAMEBUFFER, msaaFbo);
