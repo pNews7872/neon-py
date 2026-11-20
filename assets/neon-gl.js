@@ -44,6 +44,7 @@ uniform float uTint;
 flat out float vPhase;
 out float vDist;
 void main() {
+  if (aCol == 255u) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); vPhase = 0.0; vDist = 0.0; return; }   // 보이지 않는 이동
   vec2 A = toScreen(aSeg.xy), B = toScreen(aSeg.zw);
   vec2 d = B - A;
   float len = length(d);

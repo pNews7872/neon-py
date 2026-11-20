@@ -220,10 +220,16 @@
       if (y < b.minY) b.minY = y; if (y > b.maxY) b.maxY = y;
       this.n++;
     }
+    // 보이지 않게 (x, y) 로 이동 (나무처럼 갈라지는 그림용). 색 255 = 그리지 않음
+    jumpTo(x, y) {
+      if (this.n === 0 && this.pts[0] === x && this.pts[1] === y) return;
+      if (this.lastX === x && this.lastY === y) return;
+      this.push(x, y, 255);
+    }
     // fn(i, x0, y0, x1, y1) → 색 번호
     recolor(fn) {
       const p = this.pts;
-      for (let i = 0; i < this.n; i++) this.cols[i] = fn(i, p[i * 2], p[i * 2 + 1], p[i * 2 + 2], p[i * 2 + 3]);
+      for (let i = 0; i < this.n; i++) if (this.cols[i] !== 255) this.cols[i] = fn(i, p[i * 2], p[i * 2 + 1], p[i * 2 + 2], p[i * 2 + 3]);
     }
   }
 
@@ -292,7 +298,9 @@
       } else if (m.type === 'append') {
         const p = m.pts, c = m.cols;
         for (let i = 0; i < c.length; i++) {
-          const k = c[i], path = paths[k];
+          const k = c[i];
+          if (k === 255) continue;                 // 255 = 보이지 않는 이동(점프)
+          const path = paths[k];
           const x0 = p[i * 2], y0 = p[i * 2 + 1];
           // 같은 색 선이 이어지면 한 줄로 (이음매에 번짐이 겹쳐 밝은 점이 생기지 않게)
           if (x0 !== lastX[k] || y0 !== lastY[k]) path.moveTo(x0, y0);
@@ -525,6 +533,7 @@
       const lx = new Array(K).fill(NaN), ly = new Array(K).fill(NaN);
       for (let i = this.bufUpTo; i < st.n; i++) {
         const c = cols[i];
+        if (c === 255) continue;                   // 보이지 않는 이동
         if (!tmp[c]) tmp[c] = new Path2D();
         const x0 = p[i * 2], y0 = p[i * 2 + 1];
         if (x0 !== lx[c] || y0 !== ly[c]) tmp[c].moveTo(x0, y0);

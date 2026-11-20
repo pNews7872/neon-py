@@ -73,11 +73,33 @@
     return pts;
   }
 
+  // 콜라츠 나무: 꺾은선이 아니라 가지들이라 [x0,y0],[x1,y1] 짝으로 (미리보기에서는 선분 목록으로 그림)
+  function collatzSegs(count) {
+    const pos = new Map([[1, [0, 0, 0]]]);
+    const segs = [];
+    for (let n = 2; n <= count; n++) {
+      const chain = [];
+      let v = n;
+      while (!pos.has(v)) { chain.push(v); v = v % 2 === 0 ? v / 2 : 3 * v + 1; }
+      for (let k = chain.length - 1; k >= 0; k--) {
+        const [px, py, ph] = pos.get(v);
+        const h = ph + (chain[k] % 2 === 0 ? 8 : -16) * Math.PI / 180;
+        const x = px + Math.sin(h), y = py - Math.cos(h);
+        pos.set(chain[k], [x, y, h]);
+        segs.push([[px, py], [x, y]]);
+        v = chain[k];
+      }
+    }
+    return segs;
+  }
+
   // ---------- 미리보기: 천천히 그려지는 애니메이션 ----------
   function setupPreview(canvas, pts, palette, colorOf) {
     const { colors } = NK.buildColors(palette, 1);
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-    for (const [x, y] of pts) {
+    for (const pt of pts) {
+      if (!pt) continue;
+      const [x, y] = pt;
       if (x < minX) minX = x; if (x > maxX) maxX = x;
       if (y < minY) minY = y; if (y > maxY) maxY = y;
     }
@@ -101,6 +123,7 @@
         ctx.globalAlpha = pass ? 0.95 : 0.18;
         ctx.lineWidth = (pass ? 1.2 : 5) * DPR;
         for (let i = a; i < b; i++) {
+          if (!pts[i] || !pts[i + 1]) continue;
           ctx.strokeStyle = colors[colorOf(i, pts.length - 1)];
           ctx.beginPath();
           ctx.moveTo(pts[i][0] * s + ox, pts[i][1] * s + oy);
@@ -130,6 +153,12 @@
     const cv = card.querySelector('.preview');
     if (card.dataset.preview === 'pi') {
       setupPreview(cv, piPts, 'neon', (i, n) => Math.floor(i / n * K) % K);
+    } else if (card.dataset.preview === 'collatz') {
+      // 선분 목록을 [시작, 끝, null(끊김)] 꺾은선으로 바꿔서 같은 미리보기 함수 사용
+      const segs = collatzSegs(1500);
+      const pts = [];
+      for (const [a, b] of segs) { pts.push(a, b, null); }
+      setupPreview(cv, pts, 'aurora', (i, n) => Math.floor(i / n * K) % K);
     } else if (card.dataset.preview === 'recaman') {
       setupPreview(cv, recamanPath(70), 'sunset', (i, n) => Math.floor(i / n * K) % K);
     } else {

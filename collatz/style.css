@@ -1,0 +1,33 @@
+/* COLLATZ CORAL 전용 스타일 (공통 스타일은 ../assets/common.css) */
+
+.title { text-shadow: 0 0 10px #39ff14, 0 0 26px #00f0ff; }
+.title span { color: #ff6a00; text-shadow: 0 0 8px #ff6a00; }
+
+#path {
+  margin-top: 8px;
+  max-width: min(720px, calc(100vw - 380px));
+  font-family: "JetBrains Mono", "Consolas", "D2Coding", monospace;
+  font-size: 14px;
+  line-height: 1.5;
+  color: rgba(255, 255, 255, 0.45);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+#path b {
+  font-size: 22px;
+  color: #fff;
+  text-shadow: 0 0 8px currentColor, 0 0 18px currentColor;
+}
+#path .even { color: #00f0ff; }
+#path .odd { color: #ff2bd6; }
+#path .steps { color: #d8d8e8; margin-left: 6px; }
+
+.rule-box { font-size: 12.5px; line-height: 1.7; color: #c8c8da; }
+.rule-box b { color: #fff; }
+
+#zoneBlock.disabled { opacity: 0.35; pointer-events: none; }
+
+@media (max-width: 720px) {
+  #path { max-width: calc(100vw - 36px); }
+}
