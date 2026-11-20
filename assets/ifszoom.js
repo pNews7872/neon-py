@@ -140,9 +140,94 @@
       }
       if (!cpath) return { bad: 'nocenter' };
       // 0번 덩어리의 현이 거북이 원래 방향(처음 진행 방향)에서 얼마나 돌아가 있는지 → 화면을 거북이 방향에 맞출 때 씀
-      return { q: qq, lay, cpath, dim, maxR, chordAng: Math.atan2(vJ[0][1], vJ[0][0]) };
+      // hist[i]는 치환을 i+1번 한 덩어리 → vJ는 (700 − qq)단계
+      return { q: qq, lay, cpath, dim, maxR, chordAng: Math.atan2(vJ[0][1], vJ[0][0]), level: hist.length - qq };
     }
     return { bad: 'nocenter' };
+  }
+
+  // ---------------------------------------------------------
+  // 진짜 거북이 그림 조각 (가장 작은 단계를 직선 대신 실제 걸음으로 그리기)
+  // 종류 t마다: 고운 그림 = σ^j(t)를 실제로 걸은 것, 거친 그림 = σ^(j−q)(t)를 걸은 것을
+  // 고운 그림의 꼭짓점마다 대응시킨 것 (모핑용). 둘 다 현이 (0,0)→(1,0)이 되도록 맞춤.
+  // ---------------------------------------------------------
+  function turtle(kind, word, a) {
+    const N = word.length;
+    const px = new Float64Array(N + 1), py = new Float64Array(N + 1), mv = new Uint8Array(N);
+    let x = 0, y = 0, h = 0;
+    for (let i = 0; i < N; i++) {
+      const c = word[i];
+      let move = true;
+      if (kind === 'tm') { if (c === 1) { h = (h + a) % 360; move = false; } }
+      if (move) { const r = h * Math.PI / 180; x += Math.cos(r); y += Math.sin(r); mv[i] = 1; }
+      if (kind === 'fib' && c === 0) h = (((i + 1) % 2 ? h + a : h - a) % 360 + 360) % 360;
+      px[i + 1] = x; py[i + 1] = y;
+    }
+    return { px, py, mv, N };
+  }
+  function buildTemplates(kind, angle, q, level, lay) {
+    // 투에-모스의 실제 걸음은 작은 단계에서 앞뒤로 엉켜 있어서(128걸음이 6칸 남짓) 극한 모양(현)으로 그리는 게 더 깔끔함
+    if (kind !== 'fib') return null;
+    const a = Math.round(angle);
+    for (let m = 1; m <= 6; m++) {
+      const j = (level % q) + m * q;
+      const out = [];
+      let ok = true;
+      for (let t = 0; t < 2 && ok; t++) {
+        const wf = expand(kind, t, j);
+        if (wf.length > 400) { ok = false; break; }
+        const wc = expand(kind, t, j - q);
+        const F = turtle(kind, wf, a), C = turtle(kind, wc, a);
+        const fdx = F.px[F.N] - F.px[0], fdy = F.py[F.N] - F.py[0], fd2 = fdx * fdx + fdy * fdy;
+        const cdx = C.px[C.N], cdy = C.py[C.N], cd2 = cdx * cdx + cdy * cdy;
+        let moves = 0; for (let i = 0; i < F.N; i++) moves += F.mv[i];
+        if (fd2 < 4 || cd2 < 0.5 || moves < 24) { ok = false; break; }
+        const nf = (x, y) => [(x * fdx + y * fdy) / fd2, (y * fdx - x * fdy) / fd2];
+        const nc = (x, y) => [(x * cdx + y * cdy) / cd2, (y * cdx - x * cdy) / cd2];
+        // 고운 꼭짓점 k → 거친 그림 위의 대응점
+        const blen = [expand(kind, 0, q).length, expand(kind, 1, q).length];
+        const cxk = new Float64Array(F.N + 1), cyk = new Float64Array(F.N + 1);
+        let k = 0;
+        for (let mi = 0; mi < wc.length; mi++) {
+          const B = blen[wc[mi]];
+          for (let r = 0; r < B; r++, k++) {
+            const f = r / B;
+            const [x, y] = nc(C.px[mi] + (C.px[mi + 1] - C.px[mi]) * f, C.py[mi] + (C.py[mi + 1] - C.py[mi]) * f);
+            cxk[k] = x; cyk[k] = y;
+          }
+        }
+        { const [x, y] = nc(C.px[C.N], C.py[C.N]); cxk[k] = x; cyk[k] = y; }
+        const segs = [];
+        for (let i = 0; i < F.N; i++) {
+          if (!F.mv[i]) continue;
+          const [f0x, f0y] = nf(F.px[i], F.py[i]), [f1x, f1y] = nf(F.px[i + 1], F.py[i + 1]);
+          segs.push(f0x, f0y, f1x, f1y, cxk[i], cyk[i], cxk[i + 1], cyk[i + 1]);
+        }
+        // 자식(σ^(j−q) 덩어리) 경계 = 거친 단계에서 자식들이 놓일 자리
+        const ch = expand(kind, t, q);
+        const sub = [];
+        let off = 0;
+        for (const sym of ch) {
+          const L = expand(kind, sym, j - q).length;
+          const [x0, y0] = nf(F.px[off], F.py[off]), [x1, y1] = nf(F.px[off + L], F.py[off + L]);
+          sub.push(x0, y0, x1, y1);
+          off += L;
+        }
+        out.push({ segs: new Float64Array(segs), n: segs.length / 8, sub: new Float64Array(sub), C: Math.sqrt(fd2) });
+      }
+      if (!ok) continue;
+      // 펴짐이 끝났을 때 모든 자식의 걸음이 T 이하가 되도록 하는 배율
+      for (let t = 0; t < 2; t++) {
+        let lam = Infinity;
+        lay[t].forEach(sg => {
+          const r = Math.hypot(sg[4] - sg[2], sg[5] - sg[3]);
+          if (r > 1e-12) lam = Math.min(lam, out[sg[0]].C / (r * out[t].C));
+        });
+        out[t].lam = Math.max(1.05, lam);
+      }
+      return { j, types: out };
+    }
+    return null;
   }
 
   // 극한 모양을 촘촘히 펼쳐서 종류별 감싸는 원(현 기준) 계산
@@ -200,7 +285,9 @@
     function setupIfs(a) {
       const r = analyze(cfg.kind, a);
       if (!r || r.bad) return r || { bad: 'none' };
+      const tpl = buildTemplates(cfg.kind, a, r.q, r.level, r.lay);
       const bounds = boundsOf(r.lay);
+      if (tpl) for (const b of bounds) b.r = b.r * 1.1 + 0.06;   // 실제 걸음 그림은 극한 모양에서 조금 벗어남
       // 사슬 경로를 따라 내려가며 위상별 종류·뒤집힘, 그리고 합쳐진 지도(현)
       const P = r.cpath.length;
       const chTy = [0], chMi = [0];
@@ -223,7 +310,7 @@
         lay: r.lay, cpath: r.cpath, P, chTy, chMi, bounds, q: r.q, dim: r.dim,
         n: [r.lay[0].length, r.lay[1].length],
         cax: ax, cay: ay, cdx, cdy, g: 1 / Math.hypot(cdx, cdy), crot: Math.atan2(cdy, cdx), zx, zy,
-        maxR: r.maxR, chordAng: r.chordAng,
+        maxR: r.maxR, chordAng: r.chordAng, tpl,
       };
       pack();
       return null;
@@ -423,6 +510,25 @@
         ST[sp] = t; ST[sp + 1] = m; ST[sp + 2] = ax; ST[sp + 3] = ay; ST[sp + 4] = bx; ST[sp + 5] = by; ST[sp + 6] = h; ST[sp + 7] = ph; sp += 8;
       };
       const CP = F.cpath, PP = F.P;
+      const TP = F.tpl ? F.tpl.types : null;
+      // 거북이 그림 조각 하나를 현 (ax,ay)+(dx,dy)에 맞춰 긋기. w: 거친(0) → 고운(1)
+      const emitTpl = (t, m, ax, ay, dx, dy, w, hue) => {
+        const tp = TP[t], sg = tp.segs, n = tp.n;
+        ensureCap(n);
+        let hh2 = (hue + seedOff) % 1; if (hh2 < 0) hh2 += 1;
+        const col = (hh2 * K) | 0;
+        const sy = m ? -1 : 1;
+        for (let k = 0; k < n; k++) {
+          const o8 = k * 8;
+          const p0x = sg[o8 + 4] + (sg[o8] - sg[o8 + 4]) * w, p0y = (sg[o8 + 5] + (sg[o8 + 1] - sg[o8 + 5]) * w) * sy;
+          const p1x = sg[o8 + 6] + (sg[o8 + 2] - sg[o8 + 6]) * w, p1y = (sg[o8 + 7] + (sg[o8 + 3] - sg[o8 + 7]) * w) * sy;
+          const o = nSeg * 4;
+          buf[o] = ax + dx * p0x - dy * p0y; buf[o + 1] = ay + dx * p0y + dy * p0x;
+          buf[o + 2] = ax + dx * p1x - dy * p1y; buf[o + 3] = ay + dx * p1y + dy * p1x;
+          cols[nSeg++] = col;
+        }
+        return n;
+      };
       push(t0, m0, sx(anc.ax, anc.ay), sy(anc.ax, anc.ay), sx(anc.bx, anc.by), sy(anc.bx, anc.by), h0, phaseOf(anc.d));
       let count = 0;
       while (sp > 0) {
@@ -434,6 +540,42 @@
         const bcy = m ? -b.cy : b.cy;
         const ccx = ax + dx * b.cx - dy * bcy, ccy = ay + dx * bcy + dy * b.cx, r = b.r * L;
         if (ccx - r > hw || -ccx - r > hw || ccy - r > hh || -ccy - r > hh) continue;
+        let hw8 = (Math.log(L) - lnLo) / (lnHi - lnLo);
+        hw8 = hw8 <= 0 ? 0 : hw8 >= 1 ? 1 : hw8;
+        const P = PK[t], n = P.n, cidx = CP[ph], hstep = P.hn * hw8, nph = (ph + 1) % PP;
+
+        if (TP) {
+          // ----- 진짜 거북이 걸음으로 그리기 -----
+          const tp = TP[t];
+          const sig = L / tp.C;                       // 이 덩어리의 걸음 하나 길이(px)
+          if (sig < T || count > MAX_LEAVES) { count += emitTpl(t, m, ax, ay, dx, dy, 1, hue); continue; }
+          let w = (sig - T) / (T * (tp.lam - 1));
+          w = w >= 1 ? 1 : w * w * (3 - 2 * w);
+          const sub = tp.sub;
+          for (let i = 0; i < n; i++) {
+            // 자식 자리: 거친 단계(=지금 그림 속 덩어리 경계) → 무한 배치로
+            const u0x = sub[i * 4] + (P.u0x[i] - sub[i * 4]) * w, u1x = sub[i * 4 + 2] + (P.u1x[i] - sub[i * 4 + 2]) * w;
+            let u0y = sub[i * 4 + 1] + (P.u0y[i] - sub[i * 4 + 1]) * w, u1y = sub[i * 4 + 3] + (P.u1y[i] - sub[i * 4 + 3]) * w;
+            if (m) { u0y = -u0y; u1y = -u1y; }
+            const cax = ax + dx * u0x - dy * u0y, cay = ay + dx * u0y + dy * u0x;
+            const cbx = ax + dx * u1x - dy * u1y, cby = ay + dx * u1y + dy * u1x;
+            const ch = hue + (i - cidx) * hstep;
+            const cs = P.ty[i], cm = m ^ P.mi[i];
+            const cdx = cbx - cax, cdy = cby - cay;
+            if (w < 1) { count += emitTpl(cs, cm, cax, cay, cdx, cdy, w, ch); continue; }
+            const Lc = Math.sqrt(cdx * cdx + cdy * cdy);
+            if (Lc / TP[cs].C < T) {
+              // 화면 밖 자식은 건너뛰기 (걸음이 많아서 여기서도 확인)
+              const bb = cs ? B1 : B0, by2 = cm ? -bb.cy : bb.cy;
+              const qx = cax + cdx * bb.cx - cdy * by2, qy = cay + cdx * by2 + cdy * bb.cx, qr = bb.r * Lc;
+              if (qx - qr > hw || -qx - qr > hw || qy - qr > hh || -qy - qr > hh) continue;
+              count += emitTpl(cs, cm, cax, cay, cdx, cdy, 1, ch);
+            } else push(cs, cm, cax, cay, cbx, cby, ch, nph);
+          }
+          continue;
+        }
+
+        // ----- (거북이 그림 조각이 없을 때) 현을 직선으로 -----
         if (L < T || count > MAX_LEAVES) {
           ensureCap(1);
           const o = nSeg * 4; buf[o] = ax; buf[o + 1] = ay; buf[o + 2] = bx; buf[o + 3] = by;
@@ -443,9 +585,6 @@
         }
         let w = (L - T) / (T / PK[t].maxR - T);
         w = w >= 1 ? 1 : w * w * (3 - 2 * w);
-        let hw8 = (Math.log(L) - lnLo) / (lnHi - lnLo);
-        hw8 = hw8 <= 0 ? 0 : hw8 >= 1 ? 1 : hw8;
-        const P = PK[t], n = P.n, cidx = CP[ph], hstep = P.hn * hw8, nph = (ph + 1) % PP;
         const leafKids = L * P.maxR < T;
         if (leafKids) ensureCap(n);
         for (let i = 0; i < n; i++) {
@@ -666,4 +805,5 @@
 
   NK.IfsZoom = IfsZoom;
   NK.ifsAnalyze = analyze;
+  NK.ifsTemplates = buildTemplates;
 })(window);
