@@ -1,0 +1,37 @@
+/* RECAMÁN 전용 스타일 (공통 스타일은 ../assets/common.css) */
+
+.title { text-shadow: 0 0 10px #ffe600, 0 0 26px #ff6a00; }
+.title span { color: #ff2bd6; text-shadow: 0 0 8px #ff2bd6; }
+
+#seq {
+  margin-top: 8px;
+  font-family: "JetBrains Mono", "Consolas", "D2Coding", monospace;
+  font-size: 17px;
+  white-space: nowrap;
+  overflow: hidden;
+  color: rgba(255, 255, 255, 0.35);
+}
+#seqNow {
+  display: inline-block;
+  margin-left: 6px;
+  font-weight: 800;
+  font-size: 24px;
+  color: #fff;
+  text-shadow: 0 0 8px currentColor, 0 0 18px currentColor;
+}
+
+#rule {
+  margin-top: 4px;
+  min-height: 1.4em;
+  font-family: "JetBrains Mono", "Consolas", "D2Coding", monospace;
+  font-size: 14px;
+  color: #d8d8e8;
+}
+#rule .r-back { color: #00f0ff; text-shadow: 0 0 6px #00f0ff; }
+#rule .r-fwd { color: #ff2bd6; text-shadow: 0 0 6px #ff2bd6; }
+#rule .r-no { color: #8a8aa0; text-decoration: line-through; }
+
+.rule-box { font-size: 12.5px; line-height: 1.7; color: #c8c8da; }
+.rule-box b { color: #fff; }
+
+#zoneBlock.disabled { opacity: 0.35; pointer-events: none; }

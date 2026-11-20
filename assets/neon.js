@@ -195,9 +195,12 @@
   // ---------------------------------------------------------
   function rendererMain(zoneFactory, port, makeCanvas) {
     let K = 96, colors = [], colorsRgb = [], zoneAt = null, showZones = false;
-    let paths = [], count = 0;
+    let paths = [], count = 0, lastX = [], lastY = [];
     let canvas = null, ctx = null, small = null, smallCtx = null;
-    const resetPaths = () => { paths = Array.from({ length: K }, () => new Path2D()); count = 0; };
+    const resetPaths = () => {
+      paths = Array.from({ length: K }, () => new Path2D()); count = 0;
+      lastX = new Array(K).fill(NaN); lastY = new Array(K).fill(NaN);
+    };
     resetPaths();
 
     function drawZones(m) {
@@ -258,9 +261,12 @@
       } else if (m.type === 'append') {
         const p = m.pts, c = m.cols;
         for (let i = 0; i < c.length; i++) {
-          const path = paths[c[i]];
-          path.moveTo(p[i * 2], p[i * 2 + 1]);
+          const k = c[i], path = paths[k];
+          const x0 = p[i * 2], y0 = p[i * 2 + 1];
+          // 같은 색 선이 이어지면 한 줄로 (이음매에 번짐이 겹쳐 밝은 점이 생기지 않게)
+          if (x0 !== lastX[k] || y0 !== lastY[k]) path.moveTo(x0, y0);
           path.lineTo(p[i * 2 + 2], p[i * 2 + 3]);
+          lastX[k] = p[i * 2 + 2]; lastY[k] = p[i * 2 + 3];
         }
         count = m.start + c.length;
       } else if (m.type === 'render') {
@@ -434,15 +440,19 @@
       if (st.n - this.bufUpTo > maxDirect) { this.forceRender = true; return; }
       const tmp = new Array(K).fill(null);
       const p = st.pts, cols = st.cols;
+      const lx = new Array(K).fill(NaN), ly = new Array(K).fill(NaN);
       for (let i = this.bufUpTo; i < st.n; i++) {
         const c = cols[i];
         if (!tmp[c]) tmp[c] = new Path2D();
-        tmp[c].moveTo(p[i * 2], p[i * 2 + 1]);
+        const x0 = p[i * 2], y0 = p[i * 2 + 1];
+        if (x0 !== lx[c] || y0 !== ly[c]) tmp[c].moveTo(x0, y0);
         tmp[c].lineTo(p[i * 2 + 2], p[i * 2 + 3]);
+        lx[c] = p[i * 2 + 2]; ly[c] = p[i * 2 + 3];
       }
       const b = this.bufCam, s = b.s, ctx = this.bufCtx;
       ctx.setTransform(s, 0, 0, s, b.w / 2 - b.x * s, b.h / 2 - b.y * s);
-      ctx.lineCap = 'round';
+      // 조금씩 덧그릴 땐 끝을 둥글게 하지 않음: 앞에 그린 선 끝과 겹쳐 밝은 점이 생기지 않게
+      ctx.lineCap = 'butt';
       ctx.lineJoin = 'round';
       for (let pass = 0; pass < 2; pass++) {
         ctx.globalAlpha = pass === 0 ? 0.16 : 0.95;

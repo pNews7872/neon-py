@@ -55,6 +55,24 @@
     return pts;
   }
 
+  function recamanPath(count) {
+    const seen = new Set([0]);
+    const pts = [[0, 0]];
+    let p = 0;
+    for (let n = 1; n <= count; n++) {
+      const v = (p - n > 0 && !seen.has(p - n)) ? p - n : p + n;
+      seen.add(v);
+      const cx = (p + v) / 2, r = Math.abs(v - p) / 2, d = Math.sign(v - p), side = n % 2 ? -1 : 1;
+      const segs = Math.max(8, Math.ceil(Math.sqrt(r) * 6));
+      for (let i = 1; i <= segs; i++) {
+        const a = Math.PI * i / segs;
+        pts.push([cx - d * r * Math.cos(a), side * r * Math.sin(a)]);
+      }
+      p = v;
+    }
+    return pts;
+  }
+
   // ---------- 미리보기: 천천히 그려지는 애니메이션 ----------
   function setupPreview(canvas, pts, palette, colorOf) {
     const { colors } = NK.buildColors(palette, 1);
@@ -112,6 +130,8 @@
     const cv = card.querySelector('.preview');
     if (card.dataset.preview === 'pi') {
       setupPreview(cv, piPts, 'neon', (i, n) => Math.floor(i / n * K) % K);
+    } else if (card.dataset.preview === 'recaman') {
+      setupPreview(cv, recamanPath(70), 'sunset', (i, n) => Math.floor(i / n * K) % K);
     } else {
       setupPreview(cv, dragonPts, 'cyber', i => {
         const g = i === 0 ? 0 : Math.floor(Math.log2(i)) + 1;

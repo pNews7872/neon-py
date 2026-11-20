@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+  <title>RECAMÁN — 레카만 수열 네온 드로잉</title>
+  <link rel="stylesheet" href="../assets/common.css">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="stage">
+    <canvas id="trail"></canvas>
+    <canvas id="overlay"></canvas>
+  </div>
+
+  <header id="hud">
+    <a class="back" href="../index.html">← 메인으로</a>
+    <div class="title">RECAMÁN<span>SEQUENCE</span></div>
+    <div id="seq"><span id="seqPast"></span><span id="seqNow"></span></div>
+    <div id="rule"></div>
+    <div class="stats">
+      <span id="statN">0</span>번째 ·
+      <span id="statZoom">100%</span> ·
+      <span id="statStatus">그리는 중</span>
+    </div>
+  </header>
+
+  <aside id="panel">
+    <button id="panelToggle" class="panel-toggle" title="패널 접기/펼치기">⟨</button>
+    <div class="panel-body">
+      <section>
+        <div class="row buttons">
+          <button id="btnPlay" class="primary" title="Space">⏸ 일시정지</button>
+          <button id="btnStep" title="→">한 칸 ⏭</button>
+          <button id="btnReset" title="R">↺ 처음부터</button>
+        </div>
+      </section>
+
+      <section>
+        <label class="label">규칙</label>
+        <div class="hint rule-box">
+          0에서 시작해서 <b>n번째</b>에는 <b>n만큼 뒤로</b> 가요.<br>
+          그런데 0보다 작아지거나 <b>이미 밟은 숫자</b>면, 대신 <b>n만큼 앞으로</b> 가요.<br>
+          움직일 때마다 반원을 위·아래 번갈아 그려요.
+        </div>
+      </section>
+
+      <section>
+        <label class="label">속도 <span id="speedLabel" class="value">2 개/초</span></label>
+        <input id="speed" type="range" min="0" max="100" step="0.5" value="18">
+        <div class="hint">느리면 펜이 반원을 그리는 모습과 계산이 보이고, 빠르면 한 번에 여러 개를 그려요.</div>
+      </section>
+
+      <section>
+        <label class="label">최대 개수 <span id="maxLabel" class="value">3,000</span></label>
+        <input id="maxN" type="range" min="0" max="100" step="0.1" value="64.2">
+      </section>
+
+      <section>
+        <label class="label">색칠 방식</label>
+        <div class="seg" id="colorModeSeg">
+          <button data-cm="order" class="on">순서</button>
+          <button data-cm="dir">앞/뒤</button>
+          <button data-cm="zone">색 구역</button>
+        </div>
+        <div class="hint" id="colorModeHint"></div>
+      </section>
+
+      <section>
+        <label class="label">카메라</label>
+        <div class="seg" id="camSeg">
+          <button data-cam="follow" title="F">펜 따라가기</button>
+          <button data-cam="fit" class="on" title="A">전체 맞춤</button>
+          <button data-cam="free">자유</button>
+        </div>
+        <div class="hint">드래그로 이동 · 휠/핀치로 확대·축소 (조작하면 자유 모드로 바뀜)</div>
+      </section>
+
+      <section>
+        <label class="label">색 조합</label>
+        <select id="paletteSel">
+          <option value="neon">네온 무지개</option>
+          <option value="cyber">사이버펑크</option>
+          <option value="aurora">오로라</option>
+          <option value="sunset">선셋</option>
+          <option value="random">시드 랜덤 색</option>
+        </select>
+        <div id="gradBar" class="grad-bar"></div>
+
+        <div id="zoneBlock">
+          <label class="label" style="margin-top:14px">색 구역 크기 <span id="zoneLabel" class="value">1200</span></label>
+          <input id="zoneSize" type="range" min="200" max="8000" step="50" value="1200">
+        </div>
+
+        <label class="label" style="margin-top:14px">시드</label>
+        <div class="row seed-row">
+          <input id="seedInput" type="number" min="0" max="999999" step="1">
+          <button id="btnReseed" title="S">🎲 랜덤</button>
+        </div>
+
+        <label class="check"><input id="chkAxis" type="checkbox" checked> 수직선 보이기</label>
+        <label class="check"><input id="chkPen" type="checkbox" checked> 펜 보이기</label>
+      </section>
+    </div>
+  </aside>
+
+  <div id="toast"></div>
+
+  <script src="../assets/neon.js"></script>
+  <script src="script.js"></script>
+</body>
+</html>

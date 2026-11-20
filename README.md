@@ -34,6 +34,13 @@
 - 자유 탐색은 타일 피라미드 방식: 384px 타일을 여러 Web Worker가 나눠 그리고 재사용, 확대하면 4개로 쪼개고 축소하면 큰 타일로 합침 (한 단계 큰 타일을 먼저 깔아 빈 곳 없이)
 - 화면 회전 보정 토글: 끄면 자기 닮음 때문에 소용돌이처럼 돌고, 켜면 방향 고정
 
+## 03 · RECAMÁN (`recaman/`)
+0에서 시작해 n번째에는 n만큼 뒤로 가고, 0 이하이거나 이미 나온 숫자면 대신 n만큼 앞으로 가는
+레카만 수열을 반원으로 위·아래 번갈아 이어 그립니다.
+
+- 느린 속도에서는 펜이 반원을 그리며 그 단계의 계산(뒤로 / 이미 나옴 → 앞으로)을 보여줌
+- 속도 0.4 ~ 2,000 개/초, 최대 20,000개, 색칠: 순서 / 앞·뒤 / 색 구역, 수직선 눈금
+
 ## 공통
 - 네온 그라데이션 색 조합 5종 (네온 무지개·사이버펑크·오로라·선셋·시드 랜덤), 시드 입력/랜덤
 - 주소창 링크에 설정이 저장돼서 공유하면 같은 그림이 열립니다
@@ -49,7 +56,9 @@ index.html, home.css, home.js     메인 화면
 assets/common.css, assets/neon.js 공통 스타일·코드 (팔레트, 렌더러, 화면 조작)
 pi/      index.html, style.css, script.js
 dragon/  index.html, style.css, script.js      (세대 모드)
+         gl-renderer.js                           (무한 모드 GPU 렌더러)
          infinite.html, infinite.js              (무한 모드)
+recaman/ index.html, style.css, script.js
 ```
 
 ## GitHub Pages로 배포
