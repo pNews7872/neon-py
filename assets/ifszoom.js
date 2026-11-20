@@ -139,7 +139,8 @@
         frontier = next;
       }
       if (!cpath) return { bad: 'nocenter' };
-      return { q: qq, lay, cpath, dim, maxR };
+      // 0번 덩어리의 현이 거북이 원래 방향(처음 진행 방향)에서 얼마나 돌아가 있는지 → 화면을 거북이 방향에 맞출 때 씀
+      return { q: qq, lay, cpath, dim, maxR, chordAng: Math.atan2(vJ[0][1], vJ[0][0]) };
     }
     return { bad: 'nocenter' };
   }
@@ -187,7 +188,7 @@
     if (!Number.isFinite(angle)) angle = cfg.defaultAngle;
     let auto = ['in', 'out', 'stop'].includes(params.get('auto')) ? params.get('auto') : 'in';
     let loopOn = params.get('loop') !== '0';
-    let counter = params.get('cr') !== '0';
+    let counter = params.get('cr') === '1';
     let leafPx = Math.max(1.5, Math.min(16, parseFloat(params.get('leaf')) || 3));
     let zoomRate = 0.5;       // 초당 몇 배(2배 단위)
     let paused = false;
@@ -222,7 +223,7 @@
         lay: r.lay, cpath: r.cpath, P, chTy, chMi, bounds, q: r.q, dim: r.dim,
         n: [r.lay[0].length, r.lay[1].length],
         cax: ax, cay: ay, cdx, cdy, g: 1 / Math.hypot(cdx, cdy), crot: Math.atan2(cdy, cdx), zx, zy,
-        maxR: r.maxR,
+        maxR: r.maxR, chordAng: r.chordAng,
       };
       pack();
       return null;
@@ -338,7 +339,7 @@
     function resetView() {
       path = []; rebuildPathInfo();
       const S0 = Math.min(view.W, view.H) * 0.35;
-      cam.x = F.zx; cam.y = F.zy; cam.s = S0 * Math.sqrt(F.g); cam.rot = 0;
+      cam.x = F.zx; cam.y = F.zy; cam.s = S0 * Math.sqrt(F.g); cam.rot = F.chordAng;
       logZoom = 0;
     }
 
