@@ -22,3 +22,23 @@
 .gen-sep, .gen-max { font-size: 18px; color: rgba(255, 255, 255, 0.35); }
 
 #zoneBlock.disabled { opacity: 0.35; pointer-events: none; }
+
+/* 세대 모드 / 무한 모드 탭 */
+.mode-tabs a {
+  flex: 1;
+  text-align: center;
+  padding: 9px 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--dim);
+  text-decoration: none;
+  transition: background 0.15s, color 0.15s;
+}
+.mode-tabs a + a { border-left: 1px solid var(--line); }
+.mode-tabs a:not(.on):hover { background: rgba(255, 255, 255, 0.08); color: #fff; }
+.mode-tabs a.on {
+  color: #fff;
+  background: rgba(0, 240, 255, 0.16);
+  text-shadow: 0 0 8px var(--accent);
+  cursor: default;
+}

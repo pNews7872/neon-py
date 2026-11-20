@@ -19,6 +19,12 @@
 - 최대 20세대 (선 1,048,576개), 시계/반시계 방향
 - 색칠 방식: 세대별 / 선 순서 그라데이션 / 색 구역
 
+### 무한 모드 (`dragon/infinite.html`)
+- 끝없이 확대·축소되는 드래곤 커브: 계속 축소 / 멈춤 / 계속 확대(곡선 위를 따라 파고듦)
+- 선을 저장하지 않고 화면에 보이는 부분만 나무 구조로 내려가며 계산 (선 길이 슬라이더로 촘촘함 조절)
+- 기준 선분을 화면 크기 근처로 계속 옮겨 다녀서 숫자 정밀도 한계 없이 무한 확대/축소
+- 화면 회전 보정 토글: 끄면 자기 닮음 때문에 소용돌이처럼 돌고, 켜면 방향 고정
+
 ## 공통
 - 네온 그라데이션 색 조합 5종 (네온 무지개·사이버펑크·오로라·선셋·시드 랜덤), 시드 입력/랜덤
 - 주소창 링크에 설정이 저장돼서 공유하면 같은 그림이 열립니다
@@ -33,7 +39,8 @@
 index.html, home.css, home.js     메인 화면
 assets/common.css, assets/neon.js 공통 스타일·코드 (팔레트, 렌더러, 화면 조작)
 pi/      index.html, style.css, script.js
-dragon/  index.html, style.css, script.js
+dragon/  index.html, style.css, script.js      (세대 모드)
+         infinite.html, infinite.js              (무한 모드)
 ```
 
 ## GitHub Pages로 배포

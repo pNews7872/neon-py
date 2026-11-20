@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+  <title>DRAGON CURVE ∞ — 무한 드래곤 커브</title>
+  <link rel="stylesheet" href="../assets/common.css">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="stage">
+    <canvas id="trail"></canvas>
+    <canvas id="overlay"></canvas>
+  </div>
+
+  <header id="hud">
+    <a class="back" href="../index.html">← 메인으로</a>
+    <div class="title">DRAGON<span>CURVE ∞</span></div>
+    <div class="gen-line">
+      <span class="gen-label">배율</span>
+      <span id="zoomNow" class="gen-num">×1</span>
+    </div>
+    <div class="stats">
+      화면 속 선 <span id="statLeaves">0</span>개 ·
+      <span id="statStatus">준비</span>
+    </div>
+  </header>
+
+  <aside id="panel">
+    <button id="panelToggle" class="panel-toggle" title="패널 접기/펼치기">⟨</button>
+    <div class="panel-body">
+      <section>
+        <div class="seg mode-tabs">
+          <a href="index.html" id="linkFinite">세대 모드</a>
+          <a class="on">무한 모드 ∞</a>
+        </div>
+      </section>
+
+      <section>
+        <label class="label">자동 움직임</label>
+        <div class="seg" id="autoSeg">
+          <button data-auto="out" class="on">계속 축소</button>
+          <button data-auto="stop">멈춤</button>
+          <button data-auto="in">계속 확대</button>
+        </div>
+        <div class="hint" id="autoHint"></div>
+        <label class="label" style="margin-top:12px">속도 <span id="zspeedLabel" class="value">0.5배/초</span></label>
+        <input id="zspeed" type="range" min="0" max="100" step="0.5" value="40">
+      </section>
+
+      <section>
+        <label class="check" style="margin-top:0"><input id="chkCounter" type="checkbox"> 화면 회전 보정</label>
+        <div class="hint">끄면 확대·축소할 때 그림이 소용돌이처럼 빙글빙글 돌아요. 켜면 화면을 반대로 돌려서 방향을 고정해요.</div>
+      </section>
+
+      <section>
+        <label class="label">선 길이 <span id="leafLabel" class="value">8px</span></label>
+        <input id="leafPx" type="range" min="3" max="64" step="1" value="8">
+        <div class="hint">화면에서 선 하나가 이 길이보다 작아지면 더 쪼개지 않아요. 작을수록 촘촘하고 무거워요.</div>
+      </section>
+
+      <section>
+        <label class="label">회전 방향</label>
+        <div class="seg" id="dirSeg">
+          <button data-dir="cw" class="on">시계 방향</button>
+          <button data-dir="ccw">반시계 방향</button>
+        </div>
+      </section>
+
+      <section>
+        <label class="label">색칠 방식</label>
+        <div class="seg" id="colorModeSeg">
+          <button data-cm="gen" class="on">세대별</button>
+          <button data-cm="depth">접힘 그라데이션</button>
+        </div>
+        <div class="hint" id="colorModeHint"></div>
+      </section>
+
+      <section>
+        <label class="label">색 조합</label>
+        <select id="paletteSel">
+          <option value="neon">네온 무지개</option>
+          <option value="cyber">사이버펑크</option>
+          <option value="aurora">오로라</option>
+          <option value="sunset">선셋</option>
+          <option value="random">시드 랜덤 색</option>
+        </select>
+        <div id="gradBar" class="grad-bar"></div>
+
+        <label class="label" style="margin-top:14px">시드</label>
+        <div class="row seed-row">
+          <input id="seedInput" type="number" min="0" max="999999" step="1">
+          <button id="btnReseed" title="S">🎲 랜덤</button>
+        </div>
+      </section>
+
+      <section>
+        <div class="row buttons">
+          <button id="btnHome" title="R">↺ 처음 위치로</button>
+        </div>
+        <div class="hint">드래그로 이동 · 휠/핀치로 확대·축소 · Space 자동 멈춤/재개</div>
+      </section>
+    </div>
+  </aside>
+
+  <div id="toast"></div>
+
+  <script src="../assets/neon.js"></script>
+  <script src="infinite.js"></script>
+</body>
+</html>

@@ -406,6 +406,8 @@
 
   function syncUrl() {
     NK.writeParams({ seed: color.seed, zone: color.zoneScale, pal: color.paletteKey, cm: colorMode, dir: dirSign < 0 ? 'ccw' : 'cw', max: maxGen });
+    // 무한 모드로 갈 때 색 설정 유지
+    document.getElementById('linkInfinite').href = `infinite.html?seed=${color.seed}&pal=${color.paletteKey}&dir=${dirSign < 0 ? 'ccw' : 'cw'}`;
   }
 
   const colorUi = NK.bindColorControls(color, {
