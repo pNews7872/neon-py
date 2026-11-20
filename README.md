@@ -51,6 +51,9 @@
 - 시작 수 최대 1,000,000개(GPU, 모바일 200,000 / 캔버스 50,000), 색칠: 1에서 거리 / 시작 수 / 색 구역
 
 ## 공통
+- **사진 저장 / 영상 녹화** (패널 맨 아래 '저장', 단축키 P / V): 화면을 찍는 대신 정해진 해상도로 한 프레임씩 정확히 그려서 저장
+  · 사진 PNG: 화면×2 / 4K / 8K · 영상 MP4(H.264, WebCodecs + mp4-muxer): 1080p / 1440p / 4K, 30/60fps, 5초~2분 또는 중지할 때까지
+  · 가상 시간으로 프레임을 돌려서 버거운 장면도 끊김 없는 영상이 나옴 (GPU로 그릴 때만)
 - **모든 페이지 GPU(WebGL2) 렌더링** (`assets/neon-gl.js`): 매 프레임 지금 카메라 그대로 전부 다시 그려서
   확대·축소·이동 중에도 늘림·흐림이 없음. 선은 셰이더 안티에일리어싱 + 흰 심지, 번짐은 블룸.
   선분은 6만5천 개씩 묶어 묶음별 상대 좌표로 저장해 멀리·깊이 확대해도 흔들리지 않음.
@@ -70,6 +73,7 @@
 index.html, home.css, home.js     메인 화면
 assets/common.css, assets/neon.js 공통 스타일·코드 (팔레트, 카메라·화면 조작, 캔버스 렌더러)
 assets/neon-gl.js                 공통 GPU 렌더러
+assets/vendor/mp4-muxer.js        MP4 만들기 (MIT, Vanilagy)
 pi/      index.html, style.css, script.js
 dragon/  index.html, style.css, script.js      (세대 모드)
          gl-renderer.js                           (무한 모드 GPU 렌더러)

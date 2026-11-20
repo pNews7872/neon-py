@@ -272,3 +272,37 @@ input[type="number"] { font-family: "Consolas", monospace; user-select: text; }
 }
 
 .render-tag { color: var(--dim); }
+
+/* ---------- 저장 ---------- */
+.cap-opts {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px 10px;
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--dim);
+}
+.cap-opts label { display: flex; flex-direction: column; gap: 4px; }
+.cap-opts select { padding: 6px 8px; font-size: 12.5px; }
+button:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.rec-badge {
+  position: fixed;
+  top: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 50;
+  display: none;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px 8px 14px;
+  border-radius: 999px;
+  background: rgba(20, 6, 12, 0.85);
+  border: 1px solid rgba(255, 51, 102, 0.6);
+  box-shadow: 0 0 20px rgba(255, 51, 102, 0.35);
+  font-size: 13px;
+  color: #fff;
+}
+.rec-dot { width: 10px; height: 10px; border-radius: 50%; background: #ff3366; box-shadow: 0 0 10px #ff3366; animation: recblink 1s infinite; }
+@keyframes recblink { 50% { opacity: 0.25; } }
+.rec-stop { padding: 5px 10px; border-radius: 999px; font-size: 12px; }

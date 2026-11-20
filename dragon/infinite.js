@@ -281,10 +281,11 @@
   const view = { W: 0, H: 0, DPR: 1 };
   let dirty = true, lastLeaves = 0;
 
+  let forcedSize = null;            // 녹화·사진 저장 중 정해진 해상도
   function resize() {
     const oldDpr = view.DPR;
-    view.DPR = Math.min(window.devicePixelRatio || 1, 2);
-    view.W = window.innerWidth; view.H = window.innerHeight;
+    view.DPR = forcedSize ? forcedSize.DPR : Math.min(window.devicePixelRatio || 1, 2);
+    view.W = forcedSize ? forcedSize.W : window.innerWidth; view.H = forcedSize ? forcedSize.H : window.innerHeight;
     for (const c of [trail, overlay]) { c.width = Math.round(view.W * view.DPR); c.height = Math.round(view.H * view.DPR); }
     if (oldDpr !== view.DPR && typeof invalidateTiles === 'function') invalidateTiles();
     dirty = true;
@@ -630,6 +631,7 @@
   }
 
   function rightInset() {
+    if (forcedSize) return 0;
     const panel = document.getElementById('panel');
     if (!panel || panel.classList.contains('collapsed') || view.W <= 720) return 0;
     return Math.max(0, view.W - panel.getBoundingClientRect().left);
@@ -832,7 +834,8 @@
   const qualityPct = () => Math.round((Math.min(1, resScale) / boost) * 100);
 
   function glFrame() {
-    const q = { scale: resScale, boost };
+    // 녹화 중에는 화질을 낮추지 않음 (시간에 쫓기지 않으니까)
+    const q = forcedSize ? { scale: 1, boost: 1 } : { scale: resScale, boost };
     const w = Math.max(1, Math.round(view.W * view.DPR * q.scale));
     const h = Math.max(1, Math.round(view.H * view.DPR * q.scale));
     glr.resize(w, h);
@@ -991,7 +994,7 @@
     const W = view.W, H = view.H;
     oCtx.setTransform(view.DPR, 0, 0, view.DPR, 0, 0);
     oCtx.clearRect(0, 0, W, H);
-    if (paused || autoMode === 'stop') return;
+    if (paused || autoMode === 'stop' || NK.capture.active) return;   // 녹화 영상에는 + 표시를 넣지 않음
     const x = W / 2, y = H / 2;
     oCtx.strokeStyle = 'rgba(255,255,255,0.55)';
     oCtx.lineWidth = 1;
@@ -1099,6 +1102,12 @@
 
   document.getElementById('btnHome').addEventListener('click', goHome);
   NK.bindPanelToggle();
+  NK.bindCapture({
+    ok: () => glMode,
+    sources: () => [glMode ? glCanvas : trail, overlay],
+    setForced: (f) => { forcedSize = f; resize(); rebase(); },
+    maxSide: () => (glr ? glr.gl.getParameter(glr.gl.MAX_TEXTURE_SIZE) : 8192),
+  });
   NK.onLineStyle(() => { invalidateTiles(); loop.key = ''; });
 
   function syncUrl() {

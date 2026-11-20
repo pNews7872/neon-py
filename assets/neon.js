@@ -7,6 +7,8 @@
    ========================================================= */
 (function (global) {
   'use strict';
+  // 이 파일이 있는 폴더 (녹화용 라이브러리를 필요할 때 불러오려고)
+  const SCRIPT_BASE = ((document.currentScript && document.currentScript.src) || '').replace(/[^/]*$/, '');
 
   const K = 96;                    // 그라데이션 단계 수
   const GLOW_PX = 6;               // 선 번짐(글로우) 두께 (화면 px)
@@ -335,6 +337,7 @@
   // 화면 이동·확대는 버퍼 이미지를 옮기고 늘리기만 하고,
   // 필요할 때만 워커가 백그라운드에서 다시 그린다.
   // ---------------------------------------------------------
+  const views = [];
   class NeonView {
     /**
      * opts.trail, opts.overlay : 캔버스
@@ -419,10 +422,28 @@
       if (!this.gpu && this.gpuError && !noGl) setTimeout(() => toast('GPU를 쓰지 못해서 기본 방식으로 그려요: ' + this.gpuError), 800);
 
       this._bindInput();
+      views.push(this);
       styleListeners.push(() => { this.forceRender = true; });
       window.addEventListener('resize', () => this.resize());
       this.resize();
       this.sendConfig();
+    }
+
+    // ---------- 녹화·사진 저장 ----------
+    captureAdapter() {
+      return {
+        ok: () => this.gpu,
+        sources: () => [this.gpu ? this.glCanvas : this.trail, this.overlay],
+        setForced: (f) => {
+          this.forced = f; this.resize();
+          // 패널을 피하던 배치를 영상 기준으로 다시 (녹화 시작 땐 바로 맞춤)
+          if (this.camMode === 'fit') {
+            this.fitTarget(true);
+            if (f) { this.cam.x = this.target.x; this.cam.y = this.target.y; this.cam.s = this.target.s; }
+          }
+        },
+        maxSide: () => (this.gpu ? this.glr.gl.getParameter(this.glr.gl.MAX_TEXTURE_SIZE) : 8192),
+      };
     }
 
     // ---------- 좌표 ----------
@@ -439,8 +460,9 @@
     }
 
     resize() {
-      this.DPR = Math.min(window.devicePixelRatio || 1, 2);
-      this.W = window.innerWidth; this.H = window.innerHeight;
+      const f = this.forced;                     // 녹화·사진 저장 중에는 정해진 해상도로
+      this.DPR = f ? f.DPR : Math.min(window.devicePixelRatio || 1, 2);
+      this.W = f ? f.W : window.innerWidth; this.H = f ? f.H : window.innerHeight;
       for (const c of [this.trail, this.overlay]) {
         c.width = Math.round(this.W * this.DPR);
         c.height = Math.round(this.H * this.DPR);
@@ -635,6 +657,7 @@
     }
 
     rightInset() {
+      if (this.forced) return 0;                 // 녹화·사진에는 패널이 없으니 가리는 것도 없음
       const panel = document.getElementById('panel');
       if (!panel || panel.classList.contains('collapsed') || this.W <= 720) return 0;
       const r = panel.getBoundingClientRect();
@@ -679,7 +702,7 @@
       const st = this.store, L = this.segLayer;
       if (this._gpuReset || st.n < this.uploaded) { L.reset(); this.uploaded = 0; this._gpuReset = false; }
       if (st.n > this.uploaded) { L.appendFrom(st.pts, st.cols, this.uploaded, st.n); this.uploaded = st.n; }
-      const ss = this.ss;
+      const ss = this.forced ? 1 : this.ss;
       const w = Math.max(1, Math.round(this.W * this.DPR * ss)), h = Math.max(1, Math.round(this.H * this.DPR * ss));
       this.glr.resize(w, h);
       const px = this.DPR * ss;
@@ -869,6 +892,7 @@
     const btn = document.getElementById('panelToggle');
     if (panel && btn) btn.addEventListener('click', () => panel.classList.toggle('collapsed'));
     bindLineStyle();
+    if (views.length) bindCapture(views[0].captureAdapter());
     // 좁은 화면(모바일)에서는 그림이 보이도록 접은 채로 시작
     if (panel && window.innerWidth <= 720) panel.classList.add('collapsed');
   }
@@ -877,6 +901,246 @@
   function isTyping(e) {
     const t = e.target;
     return (t.tagName === 'INPUT' && t.type !== 'range' && t.type !== 'checkbox') || t.tagName === 'SELECT';
+  }
+
+
+  // ---------------------------------------------------------
+  // 녹화·사진 저장
+  // 화면을 실시간으로 찍지 않고, 정해진 해상도로 프레임을 하나씩 정확한 시간 간격으로 그려서 저장한다.
+  // (그래서 화면이 버거운 장면도 영상은 끊김 없이 나옴)
+  // 페이지의 매 프레임 함수는 requestAnimationFrame 으로 돌기 때문에, 녹화 중에는 그걸 가로채서
+  // 가상의 시간으로 한 프레임씩 직접 돌린다.
+  // ---------------------------------------------------------
+  const capture = { active: false, stop: false };
+  const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+  function hijackFrames() {
+    const real = global.requestAnimationFrame.bind(global);
+    let queue = [];
+    global.requestAnimationFrame = (cb) => { queue.push(cb); return 0; };
+    return {
+      async ready() { for (let i = 0; i < 200 && !queue.length; i++) await sleep(5); },
+      run(t) { const q = queue; queue = []; for (const cb of q) cb(t); },
+      restore() { global.requestAnimationFrame = real; const q = queue; queue = []; for (const cb of q) real(cb); },
+    };
+  }
+
+  function loadScript(src) {
+    return new Promise((res, rej) => {
+      const el = document.createElement('script');
+      el.src = src; el.onload = res; el.onerror = () => rej(new Error('불러오기 실패: ' + src));
+      document.head.appendChild(el);
+    });
+  }
+
+  function stamp() {
+    const d = new Date(), p = (v) => String(v).padStart(2, '0');
+    return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
+  }
+  function pageName() {
+    const parts = location.pathname.split('/').filter(Boolean);
+    let last = parts.pop() || 'home';
+    if (/^index\.html?$/.test(last)) last = parts.pop() || 'home';
+    return last.replace(/\.html?$/, '');
+  }
+  function download(blob, name) {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 5000);
+  }
+
+  // 목표 세로 해상도 → 강제할 화면 크기 (가로는 지금 창 비율 그대로, 짝수로)
+  function sizeFor(targetH, adapter) {
+    const iw = global.innerWidth, ih = global.innerHeight;
+    let H = targetH === 'screen' ? Math.round(ih * Math.min(global.devicePixelRatio || 1, 2)) : targetH;
+    let W = Math.round(H * iw / ih);
+    const max = adapter.maxSide ? adapter.maxSide() : 8192;
+    if (W > max || H > max) { const k = max / Math.max(W, H); W = Math.floor(W * k); H = Math.floor(H * k); }
+    W -= W % 2; H -= H % 2;
+    return { W, H, forced: { W: iw, H: ih, DPR: H / ih } };
+  }
+
+  function compose(comp, ctx, adapter) {
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, comp.width, comp.height);
+    for (const src of adapter.sources()) if (src && src.width) ctx.drawImage(src, 0, 0, comp.width, comp.height);
+  }
+
+  // 녹화 중 표시
+  let badge = null;
+  function showBadge(text, onStop) {
+    if (!badge) {
+      badge = document.createElement('div');
+      badge.className = 'rec-badge';
+      badge.innerHTML = '<span class="rec-dot"></span><span class="rec-text"></span><button class="rec-stop">■ 중지</button>';
+      document.body.appendChild(badge);
+    }
+    badge.querySelector('.rec-text').textContent = text;
+    const btn = badge.querySelector('.rec-stop');
+    btn.style.display = onStop ? '' : 'none';
+    btn.onclick = onStop || null;
+    badge.style.display = 'flex';
+  }
+  function hideBadge() { if (badge) badge.style.display = 'none'; }
+
+  async function savePhoto(adapter, targetH) {
+    if (capture.active) return;
+    capture.active = true;
+    const frames = hijackFrames();
+    try {
+      showBadge('사진 그리는 중…');
+      await frames.ready();
+      const { W, H, forced } = sizeFor(targetH, adapter);
+      adapter.setForced(forced);
+      const t = performance.now();
+      frames.run(t);                 // 새 해상도로 한 프레임 (시간은 거의 안 흐름)
+      frames.run(t + 0.01);
+      const comp = document.createElement('canvas');
+      comp.width = W; comp.height = H;
+      const ctx = comp.getContext('2d');
+      compose(comp, ctx, adapter);
+      const blob = await new Promise(r => comp.toBlob(r, 'image/png'));
+      download(blob, `neon-lines-${pageName()}-${stamp()}.png`);
+      toast(`사진 저장! ${W.toLocaleString()}×${H.toLocaleString()}`);
+    } catch (err) {
+      console.error(err);
+      toast('사진 저장 실패: ' + (err.message || err));
+    } finally {
+      adapter.setForced(null);
+      frames.restore();
+      hideBadge();
+      capture.active = false;
+    }
+  }
+
+  async function recordVideo(adapter, opts) {
+    if (capture.active) return;
+    if (!('VideoEncoder' in global)) { toast('이 브라우저는 영상 녹화를 지원하지 않아요. 크롬이나 엣지에서 해보세요'); return; }
+    capture.active = true; capture.stop = false;
+    const frames = hijackFrames();
+    let encoder = null;
+    try {
+      showBadge('녹화 준비 중…');
+      if (!global.Mp4Muxer) await loadScript(SCRIPT_BASE + 'vendor/mp4-muxer.js');
+      const fps = opts.fps;
+      const { W, H, forced } = sizeFor(opts.height, adapter);
+      const bitrate = Math.min(120e6, Math.round(W * H * fps * 0.12));
+      // 되는 코덱 찾기 (H.264 → VP9)
+      let cfg = null, muxCodec = 'avc';
+      for (const codec of ['avc1.640034', 'avc1.640033', 'avc1.640028', 'avc1.4d0034', 'avc1.42003e']) {
+        const c = { codec, width: W, height: H, bitrate, framerate: fps, avc: { format: 'avc' } };
+        try { if ((await VideoEncoder.isConfigSupported(c)).supported) { cfg = c; break; } } catch (e) { /* 다음 */ }
+      }
+      if (!cfg) {
+        const c = { codec: 'vp09.00.51.08', width: W, height: H, bitrate, framerate: fps };
+        if ((await VideoEncoder.isConfigSupported(c)).supported) { cfg = c; muxCodec = 'vp9'; }
+      }
+      if (!cfg) throw new Error(`${W}×${H} 영상을 만들 수 있는 코덱이 없어요. 해상도를 낮춰보세요`);
+
+      const muxer = new global.Mp4Muxer.Muxer({
+        target: new global.Mp4Muxer.ArrayBufferTarget(),
+        video: { codec: muxCodec, width: W, height: H, frameRate: fps },
+        fastStart: 'in-memory',
+      });
+      let encErr = null;
+      encoder = new VideoEncoder({ output: (chunk, meta) => muxer.addVideoChunk(chunk, meta), error: (e) => { encErr = e; } });
+      encoder.configure(cfg);
+
+      await frames.ready();
+      adapter.setForced(forced);
+      const comp = document.createElement('canvas');
+      comp.width = W; comp.height = H;
+      const ctx = comp.getContext('2d');
+
+      const total = opts.seconds > 0 ? Math.round(opts.seconds * fps) : fps * 600;   // '중지할 때까지'는 최대 10분
+      const label = `${H >= 2160 ? '4K' : H + 'p'} ${fps}fps`;
+      let vt = performance.now();
+      frames.run(vt);                // 새 해상도 적용용 한 프레임
+      let f = 0;
+      for (; f < total && !capture.stop; f++) {
+        if (encErr) throw encErr;
+        vt += 1000 / fps;
+        frames.run(vt);
+        compose(comp, ctx, adapter);
+        const frame = new VideoFrame(comp, { timestamp: Math.round(f * 1e6 / fps), duration: Math.round(1e6 / fps) });
+        encoder.encode(frame, { keyFrame: f % (fps * 2) === 0 });
+        frame.close();
+        while (encoder.encodeQueueSize > 6) await sleep(2);
+        if (f % 3 === 0) {
+          const sec = (f + 1) / fps;
+          showBadge(`녹화 중 ${sec.toFixed(1)}초${opts.seconds > 0 ? ' / ' + opts.seconds + '초' : ''} · ${label}`, () => { capture.stop = true; });
+          await sleep(0);
+        }
+      }
+      showBadge('영상 파일 만드는 중…');
+      await encoder.flush();
+      muxer.finalize();
+      const blob = new Blob([muxer.target.buffer], { type: 'video/mp4' });
+      download(blob, `neon-lines-${pageName()}-${stamp()}.mp4`);
+      toast(`영상 저장! ${(f / fps).toFixed(1)}초 · ${W}×${H} · ${(blob.size / 1e6).toFixed(1)}MB`);
+    } catch (err) {
+      console.error(err);
+      toast('녹화 실패: ' + (err.message || err));
+    } finally {
+      try { if (encoder && encoder.state !== 'closed') encoder.close(); } catch (e) { /* */ }
+      adapter.setForced(null);
+      frames.restore();
+      hideBadge();
+      capture.active = false;
+    }
+  }
+
+  // 패널에 '저장' 칸 붙이기
+  function bindCapture(adapter) {
+    const body = document.querySelector('#panel .panel-body');
+    if (!body || body.querySelector('.capture-sec')) return;
+    const sec = document.createElement('section');
+    sec.className = 'capture-sec';
+    sec.innerHTML = `
+      <label class="label">저장</label>
+      <div class="row buttons">
+        <button class="cap-photo">📷 사진 저장</button>
+        <button class="cap-video primary">🎬 영상 녹화</button>
+      </div>
+      <div class="cap-opts">
+        <label>사진 <select class="cap-psize">
+          <option value="screen2">화면 ×2</option><option value="2160">4K</option><option value="4320" selected>8K</option>
+        </select></label>
+        <label>영상 <select class="cap-vsize">
+          <option value="1080">1080p</option><option value="1440">1440p</option><option value="2160" selected>4K</option>
+        </select></label>
+        <label>프레임 <select class="cap-fps"><option value="30">30</option><option value="60" selected>60</option></select></label>
+        <label>길이 <select class="cap-len">
+          <option value="5">5초</option><option value="10" selected>10초</option><option value="20">20초</option>
+          <option value="30">30초</option><option value="60">1분</option><option value="120">2분</option><option value="0">중지할 때까지</option>
+        </select></label>
+      </div>
+      <div class="hint">화면을 그대로 찍는 게 아니라 한 프레임씩 정확히 그려서 저장해요. 그래서 버거운 장면도 영상은 끊김 없이 나와요(대신 녹화 시간은 더 걸릴 수 있어요). 가로세로 비율은 지금 창과 같아요.</div>`;
+    body.appendChild(sec);
+    const q = (c) => sec.querySelector(c);
+    const supported = adapter.ok();
+    if (!supported) {
+      q('.hint').textContent = 'GPU로 그릴 때만 저장할 수 있어요. 지금은 기본 캔버스 방식이에요.';
+      q('.cap-photo').disabled = true; q('.cap-video').disabled = true;
+      return;
+    }
+    q('.cap-photo').addEventListener('click', () => {
+      const v = q('.cap-psize').value;
+      const h = v === 'screen2' ? Math.round(global.innerHeight * Math.min(global.devicePixelRatio || 1, 2) * 2) : parseInt(v, 10);
+      savePhoto(adapter, h);
+    });
+    q('.cap-video').addEventListener('click', () => {
+      recordVideo(adapter, { height: parseInt(q('.cap-vsize').value, 10), fps: parseInt(q('.cap-fps').value, 10), seconds: parseInt(q('.cap-len').value, 10) });
+    });
+    // 단축키: P 사진, V 녹화 시작/중지
+    global.addEventListener('keydown', (e) => {
+      if (isTyping(e)) return;
+      if (e.key === 'p' || e.key === 'P') q('.cap-photo').click();
+      if (e.key === 'v' || e.key === 'V') { if (capture.active) capture.stop = true; else q('.cap-video').click(); }
+    });
   }
 
   // 선 굵기·번짐 슬라이더를 패널 맨 아래에 붙임 (모든 페이지 공통)
@@ -919,5 +1183,6 @@
     toast, bindSeg, bindColorControls, readParams, writeParams, colorFromParams,
     bindPanelToggle, isTyping, easeInOut,
     lineStyle, setLineStyle, onLineStyle: (f) => styleListeners.push(f), bindLineStyle, neonStroke,
+    bindCapture, capture,
   };
 })(window);
