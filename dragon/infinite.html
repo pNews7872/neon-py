@@ -46,6 +46,8 @@
         <div class="hint" id="autoHint"></div>
         <label class="label" style="margin-top:12px">속도 <span id="zspeedLabel" class="value">0.5배/초</span></label>
         <input id="zspeed" type="range" min="0" max="100" step="0.5" value="40">
+        <label class="check"><input id="chkFollow" type="checkbox" checked> 계속 확대할 때 곡선 따라가기</label>
+        <div class="hint">확대·축소는 화면 정중앙(＋ 표시)을 기준으로 해요. 원하는 곳을 드래그로 가운데에 두세요. 곡선 따라가기를 끄면 정중앙에서 조금도 움직이지 않아요.</div>
       </section>
 
       <section>
@@ -54,9 +56,9 @@
       </section>
 
       <section>
-        <label class="label">선 길이 <span id="leafLabel" class="value">8px</span></label>
-        <input id="leafPx" type="range" min="3" max="64" step="1" value="8">
-        <div class="hint">화면에서 선 하나가 이 길이보다 작아지면 더 쪼개지 않아요. 작을수록 촘촘하고 무거워요.</div>
+        <label class="label">세밀도 (선 길이) <span id="leafLabel" class="value">2px</span></label>
+        <input id="leafPx" type="range" min="1" max="48" step="0.5" value="2">
+        <div class="hint">화면에서 선 하나가 이 길이가 될 때까지 계속 쪼개요. 1~4px는 픽셀 단위로 촘촘하게, 크게 하면 선 모양이 보여요. 작을수록 무거워요.</div>
       </section>
 
       <section>

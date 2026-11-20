@@ -17,7 +17,7 @@
   const RADIUS = 0.92;          // 선분 AB의 하위 곡선은 중점에서 |AB|×0.8972 안에 있음 (+여유)
   const EXTRA_LEVELS = 6;       // 화면을 감싸는 조상보다 이만큼 더 올라가서 그리기 시작 (빠짐 방지)
   const MAX_CLIMB = 90;
-  const MAX_LEAVES = 6e6;       // 한 번에 그리는 선 최대 개수 (멈춤 방지)
+  const MAX_LEAVES = 40e6;      // 한 번에 그리는 선 최대 개수 (멈춤 방지)
   const FAR = 4;                // 카메라가 프레임에서 이보다 멀어지면(프레임 단위) 프레임을 옮김
   const BUF_SCALE = 1.35;       // 버퍼 한 변 = 화면 대각선 × 이 값 (회전해도 화면을 덮도록)
   const BUF_MAX_PIXELS = 40e6;
@@ -33,9 +33,10 @@
   let colorMode = params.get('cm') === 'depth' ? 'depth' : 'gen';
   let autoMode = ['out', 'in', 'stop'].includes(params.get('auto')) ? params.get('auto') : 'out';
   let counterRotate = params.get('cr') === '1';
-  let leafPx = Math.max(3, Math.min(64, parseInt(params.get('leaf'), 10) || 8));
+  let leafPx = Math.max(1, Math.min(48, parseFloat(params.get('leaf')) || 2));
   let zoomSpeed = 0.5;          // 초당 몇 배(옥타브)
   let paused = false;
+  let followCurve = params.get('follow') !== '0';   // 계속 확대할 때 곡선 위로 따라가기
 
   // ---------------------------------------------------------
   // 프레임(기준 선분)
@@ -157,12 +158,38 @@
 
       const K = m.colors.length, gs = m.gs, w = m.w, h = m.h, R = m.radius, pad = m.pad;
       const thr2 = m.thr * m.thr;
-      const paths = new Array(K).fill(null);
       const depthMode = m.mode === 'depth';
       const NONE = -1e15;
       let leaves = 0;
       const gcol = (g) => { const t = ((g * m.genStep) % 1 + 1) % 1; return Math.floor(t * K) % K; };
       const dcol = (c) => { const t = ((c * m.depthStep) % 1 + 1) % 1; return Math.floor(t * K) % K; };
+
+      // 선이 아주 짧으면(몇 px) 선 대신 픽셀을 직접 찍는다 → 훨씬 빠르고 촘촘하게 가능
+      const pixelMode = m.thr <= 4.5;
+      const paths = pixelMode ? null : new Array(K).fill(null);
+      let img = null, px32 = null, col32 = null;
+      if (pixelMode) {
+        img = new ImageData(w, h);
+        px32 = new Uint32Array(img.data.buffer);
+        col32 = m.colorsRgb.map(([r, g, b]) => ((255 << 24) | (b << 16) | (g << 8) | r) >>> 0);
+      }
+
+      function leaf(ax, ay, bx, by, c) {
+        leaves++;
+        if (!pixelMode) {
+          let p = paths[c];
+          if (!p) p = paths[c] = new Path2D();
+          p.moveTo(ax, ay); p.lineTo(bx, by);
+          return;
+        }
+        const dx = bx - ax, dy = by - ay;
+        const n = Math.max(1, Math.ceil(Math.max(Math.abs(dx), Math.abs(dy))));
+        const v = col32[c];
+        for (let i = 0; i <= n; i++) {
+          const x = (ax + dx * i / n) | 0, y = (ay + dy * i / n) | 0;
+          if (x >= 0 && y >= 0 && x < w && y < h) px32[y * w + x] = v;
+        }
+      }
 
       function d(ax, ay, bx, by, sig, lv, cnt, H) {
         const dx = bx - ax, dy = by - ay;
@@ -171,11 +198,7 @@
         const r = Math.sqrt(L2) * R + pad;
         if (mx + r < 0 || mx - r > w || my + r < 0 || my - r > h) return;   // 화면 밖: 통째로 건너뜀
         if (L2 <= thr2 || leaves >= m.maxLeaves) {
-          const c = depthMode ? dcol(cnt) : gcol(H === NONE ? lv : H);
-          let p = paths[c];
-          if (!p) p = paths[c] = new Path2D();
-          p.moveTo(ax, ay); p.lineTo(bx, by);
-          leaves++;
+          leaf(ax, ay, bx, by, depthMode ? dcol(cnt) : gcol(H === NONE ? lv : H));
           return;
         }
         const qx = mx - sig * dy * 0.5, qy = my + sig * dx * 0.5;          // 꺾이는 점
@@ -185,18 +208,38 @@
       const r = m.root;
       d(r.ax, r.ay, r.bx, r.by, r.sign, r.level, r.count, r.H === null ? NONE : r.H);
 
-      ctx.lineCap = 'round';
-      ctx.lineJoin = 'round';
-      for (let pass = 0; pass < 2; pass++) {
-        ctx.globalAlpha = pass === 0 ? 0.16 : 0.95;
-        ctx.lineWidth = pass === 0 ? m.glow : m.core;
-        for (let k = 0; k < K; k++) {
-          if (!paths[k]) continue;
-          ctx.strokeStyle = m.colors[k];
-          ctx.stroke(paths[k]);
+      if (pixelMode) {
+        // 픽셀 → 캔버스, 번짐은 작게 줄였다 늘려서(흐림 효과) 아래에 깔기
+        const core = makeCanvas(w, h);
+        core.getContext('2d').putImageData(img, 0, 0);
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'high';
+        for (const [div, alpha] of [[10, 0.55], [4, 0.45]]) {
+          const sw = Math.max(1, Math.round(w / div)), sh = Math.max(1, Math.round(h / div));
+          const small = makeCanvas(sw, sh);
+          const sc = small.getContext('2d');
+          sc.imageSmoothingEnabled = true;
+          sc.imageSmoothingQuality = 'high';
+          sc.drawImage(core, 0, 0, sw, sh);
+          ctx.globalAlpha = alpha;
+          ctx.drawImage(small, 0, 0, w, h);
         }
+        ctx.globalAlpha = 1;
+        ctx.drawImage(core, 0, 0);
+      } else {
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+        for (let pass = 0; pass < 2; pass++) {
+          ctx.globalAlpha = pass === 0 ? 0.16 : 0.95;
+          ctx.lineWidth = pass === 0 ? m.glow : m.core;
+          for (let k = 0; k < K; k++) {
+            if (!paths[k]) continue;
+            ctx.strokeStyle = m.colors[k];
+            ctx.stroke(paths[k]);
+          }
+        }
+        ctx.globalAlpha = 1;
       }
-      ctx.globalAlpha = 1;
       const bitmap = canvas.transferToImageBitmap ? canvas.transferToImageBitmap() : canvas;
       const out = { id: m.id, leaves, bitmap, w: m.w, h: m.h };
       if (canvas.transferToImageBitmap) port.postMessage(out, [bitmap]); else port.postMessage(out);
@@ -299,7 +342,7 @@
       root: { ax, ay, bx, by, sign: root.sign, level: root.level, count: root.count, H: root.H },
       gs, thr: leafPx * view.DPR, radius: RADIUS, pad: 6 * view.DPR,
       glow: 5 * view.DPR, core: 1.3 * view.DPR,
-      colors: color.colors, mode: colorMode, genStep: GEN_STEP, depthStep: DEPTH_STEP,
+      colors: color.colors, colorsRgb: color.rgb, mode: colorMode, genStep: GEN_STEP, depthStep: DEPTH_STEP,
       maxLeaves: MAX_LEAVES,
     });
     pendingView = v;
@@ -466,8 +509,8 @@
     }
     const inset = rightInset();
     cam.rot = 0;
-    cam.s = Math.min((view.W - inset - 80) / (maxX - minX), (view.H - 80) / (maxY - minY));
-    cam.x = (minX + maxX) / 2 + inset / 2 / cam.s;
+    cam.s = Math.min((view.W - inset * 2 - 80) / (maxX - minX), (view.H - 80) / (maxY - minY));
+    cam.x = (minX + maxX) / 2;           // 곡선 가운데 = 화면 정중앙
     cam.y = (minY + maxY) / 2;
     absZoom0 = absZoom();
     rebase();
@@ -490,9 +533,9 @@
 
     if (!paused && autoMode !== 'stop') {
       const f = Math.pow(2, (autoMode === 'in' ? 1 : -1) * zoomSpeed * dt);
-      const cx = (view.W - rightInset()) / 2, cy = view.H / 2;
+      const cx = view.W / 2, cy = view.H / 2;           // 화면 정중앙을 기준으로
       zoomAt(cx, cy, f);
-      if (autoMode === 'in') {
+      if (autoMode === 'in' && followCurve) {
         // 화면 가운데를 곡선 위로 천천히 끌어당김
         const [ccx, ccy] = screenToFrame(cx, cy);
         const [tx, ty] = nearestCurvePoint(ccx, ccy);
@@ -503,8 +546,26 @@
 
     if (needsRender()) requestRender();
     if (dirty) { composite(); dirty = false; }
+    drawCrosshair();
     updateHud();
     requestAnimationFrame(frameLoop);
+  }
+
+  // 자동 확대·축소의 중심(화면 정중앙) 표시
+  function drawCrosshair() {
+    const W = view.W, H = view.H;
+    oCtx.setTransform(view.DPR, 0, 0, view.DPR, 0, 0);
+    oCtx.clearRect(0, 0, W, H);
+    if (paused || autoMode === 'stop') return;
+    const x = W / 2, y = H / 2;
+    oCtx.strokeStyle = 'rgba(255,255,255,0.55)';
+    oCtx.lineWidth = 1;
+    oCtx.beginPath();
+    oCtx.moveTo(x - 14, y); oCtx.lineTo(x - 5, y);
+    oCtx.moveTo(x + 5, y); oCtx.lineTo(x + 14, y);
+    oCtx.moveTo(x, y - 14); oCtx.lineTo(x, y - 5);
+    oCtx.moveTo(x, y + 5); oCtx.lineTo(x, y + 14);
+    oCtx.stroke();
   }
 
   // ---------------------------------------------------------
@@ -544,6 +605,9 @@
   }
   zsIn.addEventListener('input', updateZoomSpeed);
 
+  const chkFollow = document.getElementById('chkFollow');
+  chkFollow.addEventListener('change', () => { followCurve = chkFollow.checked; syncUrl(); });
+
   const chkCounter = document.getElementById('chkCounter');
   chkCounter.addEventListener('change', () => { counterRotate = chkCounter.checked; syncUrl(); });
 
@@ -553,7 +617,7 @@
   leafIn.addEventListener('input', () => {
     leafLabel.textContent = leafIn.value + 'px';
     clearTimeout(leafTimer);
-    leafTimer = setTimeout(() => { leafPx = parseInt(leafIn.value, 10); forceRender = true; syncUrl(); }, 100);
+    leafTimer = setTimeout(() => { leafPx = parseFloat(leafIn.value); forceRender = true; syncUrl(); }, 100);
   });
 
   const setDirSeg = NK.bindSeg(document.getElementById('dirSeg'), 'dir', d => {
@@ -581,6 +645,7 @@
   function syncUrl() {
     const p = { seed: color.seed, pal: color.paletteKey, cm: colorMode, dir: gs < 0 ? 'ccw' : 'cw', auto: autoMode, leaf: leafPx };
     if (counterRotate) p.cr = 1;
+    if (!followCurve) p.follow = 0;
     NK.writeParams(p);
     // 세대 모드로 갈 때 색 설정 유지
     document.getElementById('linkFinite').href = `index.html?seed=${color.seed}&pal=${color.paletteKey}&dir=${gs < 0 ? 'ccw' : 'cw'}`;
@@ -605,6 +670,7 @@
   bindInput();
   chkCounter.checked = counterRotate;
   leafIn.value = leafPx; leafLabel.textContent = leafPx + 'px';
+  chkFollow.checked = followCurve;
   setAutoSeg(autoMode); autoHint.textContent = AUTO_HINT[autoMode];
   setDirSeg(gs < 0 ? 'ccw' : 'cw');
   setCmSeg(colorMode); cmHint.textContent = CM_HINT[colorMode];
