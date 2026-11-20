@@ -734,6 +734,8 @@
     const panel = document.getElementById('panel');
     const btn = document.getElementById('panelToggle');
     if (panel && btn) btn.addEventListener('click', () => panel.classList.toggle('collapsed'));
+    // 좁은 화면(모바일)에서는 그림이 보이도록 접은 채로 시작
+    if (panel && window.innerWidth <= 720) panel.classList.add('collapsed');
   }
 
   // 공통 단축키 (+/- 확대, F/A 카메라)

@@ -662,7 +662,7 @@
   let zoomOffset = 0;            // 루프를 거치며 생략된 배율(표시용)
   let looping = false;
 
-  const wantLoop = () => loopOn && autoMode !== 'stop';
+  const wantLoop = () => !glMode && loopOn && autoMode !== 'stop';
   const loopKey = () => [color.paletteKey, color.seed, colorMode, leafPx, gs, view.W, view.H, view.DPR].join('|');
 
   function enterLoop() {
@@ -786,12 +786,167 @@
   }
 
   // ---------------------------------------------------------
+  // GPU(WebGL2) 렌더링: 매 프레임 정확한 배율로 새로 그림 → 완전히 이어지는 무한 줌
+  // CPU는 화면 속 "큰 선분"(인스턴스)만 고르고, GPU가 각각을 2^K개 선의 드래곤 조각으로 펼친다.
+  // ---------------------------------------------------------
+  const IS_MOBILE = window.matchMedia && window.matchMedia('(pointer: coarse)').matches;
+  const TPL_K = IS_MOBILE ? 9 : 10;               // 템플릿 깊이 (인스턴스 하나 = 선 2^K개)
+  const MAX_INST = 80000;
+  const glCanvas = document.getElementById('gl');
+  let glr = null;
+  if (params.get('gl') !== '0') {
+    try { glr = window.DragonGL && window.DragonGL.create(glCanvas); } catch (err) { console.warn('WebGL2 사용 불가', err); glr = null; }
+  }
+  let glMode = !!glr;
+  const instBuf = [new Float32Array(MAX_INST * 7), new Float32Array(MAX_INST * 7)];
+  const instCnt = [0, 0];
+  const nodeStack = new Float64Array(9 * 400);
+  let glPalKey = '', glSegs = 0;
+
+  // 자동 품질 조절: 프레임이 밀리면 촘촘함(선 길이 배수)을 "연속으로" 조금씩 낮추고, 여유 있으면 올림.
+  // 촘촘함이 연속으로 변하는 건 확대·축소와 같은 원리라 화면에 이음매가 생기지 않는다.
+  // 해상도는 기기에 맞춰 정하고, 촘촘함을 최대로 낮춰도 버거울 때만 한 번 낮춘다.
+  const qFix = parseInt(params.get('q'), 10);           // 테스트용: 품질 고정 (0 = 최고)
+  const BOOST_MAX = 3;
+  let resScale = IS_MOBILE ? 0.75 : 1;
+  let boost = 1, boostTarget = Number.isFinite(qFix) ? Math.pow(1.25, Math.max(0, qFix)) : (IS_MOBILE ? 1.25 : 1);
+  boost = boostTarget;
+  const frameTimes = [];
+  let lastQChange = 0, blockUpUntil = 0;
+  function adaptQuality(dtMs, now, dt) {
+    // 목표 쪽으로 부드럽게 (초당 약 1/3 단계)
+    boost *= Math.pow(boostTarget / boost, Math.min(1, dt * 1.5));
+    if (!glMode || document.hidden || Number.isFinite(qFix)) return;
+    frameTimes.push(dtMs);
+    if (frameTimes.length > 240) frameTimes.shift();
+    if (frameTimes.length < 60) return;
+    let minDt = Infinity; for (const t of frameTimes) if (t >= 3.5 && t < minDt) minDt = t;
+    const refresh = Math.max(minDt, IS_MOBILE ? 16.6 : 4);       // 모바일은 60프레임 목표
+    let avg20 = 0; for (let i = frameTimes.length - 20; i < frameTimes.length; i++) avg20 += frameTimes[i] / 20;
+    const avgAll = frameTimes.reduce((x, y) => x + y, 0) / frameTimes.length;
+    if (now - lastQChange > 700 && avg20 > refresh * 1.5) {
+      if (boostTarget < BOOST_MAX) boostTarget = Math.min(BOOST_MAX, boostTarget * 1.25);
+      else if (resScale > 0.5) resScale = Math.max(0.5, resScale * 0.85);
+      lastQChange = now; blockUpUntil = now + 15000; frameTimes.length = 0;
+    } else if (now - lastQChange > 3000 && now > blockUpUntil && avgAll < refresh * 1.12 && boostTarget > 1) {
+      boostTarget = Math.max(1, boostTarget / 1.25);
+      lastQChange = now; frameTimes.length = 0;
+    }
+  }
+  const qualityPct = () => Math.round((resScale / boost) * 100);
+
+  function glFrame() {
+    const q = { scale: resScale, boost };
+    const w = Math.max(1, Math.round(view.W * view.DPR * q.scale));
+    const h = Math.max(1, Math.round(view.H * view.DPR * q.scale));
+    glr.resize(w, h);
+    glr.setTemplate(TPL_K, gs);
+    const pk = color.paletteKey + '|' + color.seed;
+    if (pk !== glPalKey) { glr.setPalette(color.rgb); glPalKey = pk; }
+
+    const sDev = cam.s * view.DPR * q.scale;
+    const leaf = leafPx * view.DPR * q.scale * q.boost;          // GPU 화면 px 기준 선 길이
+    const Lmin = leaf * Math.pow(Math.SQRT2, TPL_K);              // 인스턴스 최소 길이
+    const Lsplit2 = (Lmin * Math.SQRT2) ** 2;
+    const halfUnits = Math.hypot(view.W, view.H) / 2 / cam.s;
+    const root = findRoot(cam, halfUnits);
+    const map = makeMap(cam, sDev, w / 2, h / 2);
+    const [rax, ray] = map(root.ax, root.ay);
+    const [rbx, rby] = map(root.bx, root.by);
+
+    // 화면에 보이는 인스턴스 고르기 (스택으로 나무 내려가기)
+    instCnt[0] = instCnt[1] = 0;
+    const st = nodeStack;
+    let sp = 0;
+    const NONE = -1e15;
+    const push = (ax, ay, bx, by, sig, lv, cnt, H) => {
+      if (sp + 8 > st.length) return;
+      st[sp++] = ax; st[sp++] = ay; st[sp++] = bx; st[sp++] = by; st[sp++] = sig; st[sp++] = lv; st[sp++] = cnt; st[sp++] = H;
+    };
+    push(rax, ray, rbx, rby, root.sign, root.level, root.count, root.H === null ? NONE : root.H);
+    let tL = -1;
+    const pad = 4;
+    while (sp > 0) {
+      const H = st[--sp], cnt = st[--sp], lv = st[--sp], sig = st[--sp];
+      const by = st[--sp], bx = st[--sp], ay = st[--sp], ax = st[--sp];
+      const dx = bx - ax, dy = by - ay;
+      const L2 = dx * dx + dy * dy;
+      const mx = (ax + bx) * 0.5, my = (ay + by) * 0.5;
+      const r = Math.sqrt(L2) * RADIUS + pad;
+      if (mx + r < 0 || mx - r > w || my + r < 0 || my - r > h) continue;
+      if (L2 < Lsplit2) {
+        const gi = sig > 0 ? 0 : 1;
+        if (instCnt[gi] >= MAX_INST) continue;
+        const b = instBuf[gi], o = instCnt[gi] * 7;
+        b[o] = ax; b[o + 1] = ay; b[o + 2] = bx; b[o + 3] = by;
+        b[o + 4] = H === NONE ? -1 : (((H * GEN_STEP) % 1) + 1) % 1;
+        b[o + 5] = (((lv * GEN_STEP) % 1) + 1) % 1;
+        b[o + 6] = (((cnt * DEPTH_STEP) % 1) + 1) % 1;
+        instCnt[gi]++;
+        if (tL < 0) tL = Math.sqrt(L2);
+        continue;
+      }
+      const qx = mx - sig * dy * 0.5, qy = my + sig * dx * 0.5;
+      // 스택이라 뒤 절반을 먼저 넣음
+      push(qx, qy, bx, by, -gs, lv - 1, cnt + 1, H === NONE ? lv : H);
+      push(ax, ay, qx, qy, gs, lv - 1, cnt, H);
+    }
+    // 지오모핑: 인스턴스 길이가 Lmin→√2·Lmin 로 커지는 동안 마지막 접힘 0→100%
+    const t = tL > 0 ? Math.min(1, Math.max(0, 2 * Math.log2(tL / Lmin))) : 0;
+    glSegs = (instCnt[0] + instCnt[1]) * (1 << TPL_K);
+    glr.render(instBuf, instCnt, {
+      t, mode: colorMode === 'gen' ? 0 : 1, genStep: GEN_STEP, depthStep: DEPTH_STEP,
+      intensity: 0.9, bloom: 0.32, exposure: 1.25,
+    });
+  }
+
+  // 시작점(곡선이 시작되는 점)을 화면 정중앙으로: 지금 배율은 유지
+  function centerOnOrigin() {
+    const z = absZoom();
+    const S0 = Math.min(view.W, view.H) * 0.42;
+    const lv = -2 * Math.round(z - Math.log2(S0));
+    frame.level = lv; frame.bits = []; frame.cnt = [0]; frame.firstOne = -1;
+    cam.x = 0; cam.y = 0;
+    cam.s = Math.pow(2, z + lv / 2);
+    rebase();
+    dirty = true;
+  }
+
+  function setGlMode(on) {
+    glMode = on && !!glr;
+    glCanvas.style.display = glMode ? 'block' : 'none';
+    trail.style.display = glMode ? 'none' : 'block';
+    dirty = true;
+  }
+  glCanvas.addEventListener('webglcontextlost', (e) => { e.preventDefault(); setGlMode(false); NK.toast('GPU 그리기가 중단돼서 기본 방식으로 바꿨어요'); });
+
+  // ---------------------------------------------------------
   // 메인 루프
   // ---------------------------------------------------------
   let lastT = performance.now();
   function frameLoop(now) {
-    const dt = Math.min(0.1, (now - lastT) / 1000);
+    const rawDt = now - lastT;
+    const dt = Math.min(0.1, rawDt / 1000);
     lastT = now;
+
+    if (glMode) {
+      if (!paused && autoMode !== 'stop') {
+        const f = Math.pow(2, (autoMode === 'in' ? 1 : -1) * zoomSpeed * dt);
+        zoomAt(view.W / 2, view.H / 2, f);
+        if (autoMode === 'in' && followCurve && !loopOn) {
+          const [ccx, ccy] = screenToFrame(view.W / 2, view.H / 2);
+          const [tx, ty] = nearestCurvePoint(ccx, ccy);
+          const k = 1 - Math.exp(-dt * 2.5);
+          cam.x += (tx - ccx) * k; cam.y += (ty - ccy) * k;
+        }
+      }
+      glFrame();
+      adaptQuality(rawDt, now, dt);
+      drawCrosshair();
+      updateHud();
+      requestAnimationFrame(frameLoop);
+      return;
+    }
 
     if (wantLoop() && !looping) enterLoop();
     else if (!wantLoop() && looping) exitLoop();
@@ -857,7 +1012,9 @@
   let hudKey = '';
   function updateHud() {
     const z = absZoom() + zoomOffset + (looping ? loop.n : 0) - absZoom0;
-    const info = looping || loop.hold
+    const info = glMode
+      ? `GPU · 선 ${glSegs.toLocaleString('ko-KR')}개 · 품질 ${qualityPct()}%`
+      : looping || loop.hold
       ? (loop.ready ? `루프 그림 선 ${lastLeaves.toLocaleString('ko-KR')}개` : '루프 그림 그리는 중…')
       : (coverageComplete ? `타일 ${tileHave}개 완료` : `타일 ${tileHave}/${tileNeed} 그리는 중…`);
     const key = z.toFixed(1) + '|' + info + '|' + autoMode + paused + color.paletteKey + color.seed;
@@ -878,10 +1035,18 @@
     loop: '시작점을 중심으로 끊김 없이 무한 반복돼요. 새로 그리지 않아서 아주 부드러워요.',
   };
   function updateAutoHint() {
+    if (glMode) {
+      autoHint.textContent = autoMode === 'stop' ? AUTO_HINT.stop
+        : loopOn ? '곡선의 시작점을 중심으로 끝없이 ' + (autoMode === 'in' ? '확대돼요.' : '축소돼요.') + ' 매 프레임 새로 그려서 끊김이 없어요.'
+        : '화면 정중앙(＋)을 중심으로 끝없이 ' + (autoMode === 'in' ? '확대돼요.' : '축소돼요.');
+      return;
+    }
     autoHint.textContent = autoMode !== 'stop' && loopOn ? AUTO_HINT.loop : AUTO_HINT[autoMode];
   }
   const setAutoSeg = NK.bindSeg(document.getElementById('autoSeg'), 'auto', a => {
+    const wasStop = autoMode === 'stop';
     autoMode = a; paused = false; setAutoSeg(a); updateAutoHint(); syncUrl();
+    if (glMode && loopOn && a !== 'stop' && wasStop) centerOnOrigin();
   });
 
   const zsIn = document.getElementById('zspeed');
@@ -893,7 +1058,10 @@
   zsIn.addEventListener('input', updateZoomSpeed);
 
   const chkLoop = document.getElementById('chkLoop');
-  chkLoop.addEventListener('change', () => { loopOn = chkLoop.checked; updateAutoHint(); syncUrl(); });
+  chkLoop.addEventListener('change', () => {
+    loopOn = chkLoop.checked; updateAutoHint(); syncUrl();
+    if (glMode && loopOn && autoMode !== 'stop') centerOnOrigin();
+  });
 
   const chkFollow = document.getElementById('chkFollow');
   chkFollow.addEventListener('change', () => { followCurve = chkFollow.checked; syncUrl(); });
@@ -957,6 +1125,14 @@
   // ---------------------------------------------------------
   // 시작
   // ---------------------------------------------------------
+  // GPU 모드에서는 "무한 루프" 대신 "시작점 중심"
+  if (glr) {
+    chkLoop.parentElement.lastChild.textContent = ' 시작점 중심 (소용돌이 무한 줌)';
+    const hint = chkLoop.parentElement.nextElementSibling;
+    if (hint) hint.textContent = '켜면 곡선의 시작점을 화면 정중앙에 두고 확대·축소해요. 끄면 지금 화면 정중앙(＋)을 기준으로 해요. 어느 쪽이든 매 프레임 새로 그려서 끊김이 없어요.';
+    chkFollow.parentElement.lastChild.textContent = ' 시작점 중심을 끈 채 계속 확대할 때 곡선 따라가기';
+  }
+
   resize();
   bindInput();
   chkCounter.checked = counterRotate;
@@ -967,7 +1143,10 @@
   setDirSeg(gs < 0 ? 'ccw' : 'cw');
   setCmSeg(colorMode); cmHint.textContent = CM_HINT[colorMode];
   updateZoomSpeed();
+  setGlMode(glMode);
+  updateAutoHint();
   goHome();
+  if (glMode && loopOn && autoMode !== 'stop') centerOnOrigin();
   syncUrl();
   requestAnimationFrame(frameLoop);
 })();
