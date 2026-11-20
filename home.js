@@ -93,6 +93,60 @@
     return segs;
   }
 
+
+  // 오늘 날짜 지수합: n/월 + n²/일 + n³/연도 바퀴
+  function curlicuePath() {
+    const d = new Date(), m = d.getMonth() + 1, dd = d.getDate(), y = d.getFullYear() % 100 || 100;
+    const gcd = (a, b) => { while (b) [a, b] = [b, a % b]; return a; };
+    const lcm = (a, b) => a / gcd(a, b) * b;
+    const M = m * dd * y, L = Math.min(40000, lcm(lcm(m, dd), y));
+    const pts = [[0, 0]];
+    let x = 0, yy = 0;
+    for (let n = 0; n < L; n++) {
+      const r = n % M, r2 = r * r % M, r3 = r2 * r % M;
+      const t = ((r * dd * y + r2 * m * y + r3 * m * dd) % M) / M * 2 * Math.PI;
+      x += Math.cos(t); yy -= Math.sin(t);
+      pts.push([x, yy]);
+    }
+    return pts;
+  }
+  function fibwordPath(len) {
+    let a = '0', b = '01';
+    while (b.length < len) [a, b] = [b, b + a];
+    const pts = [[0, 0]];
+    let x = 0, y = 0, h = -Math.PI / 2;
+    for (let i = 0; i < len; i++) {
+      x += Math.cos(h); y += Math.sin(h);
+      x = Math.round(x); y = Math.round(y);
+      pts.push([x, y]);
+      if (b[i] === '0') h += ((i + 1) % 2 === 0 ? -1 : 1) * Math.PI / 2;
+    }
+    return pts;
+  }
+  function thuemorsePath(count) {
+    const pts = [[0, 0]];
+    let x = 0, y = 0, h = 0;
+    for (let n = 0; n < count; n++) {
+      let c = 0, v = n; while (v) { v &= v - 1; c++; }
+      if (c % 2 === 0) { x += Math.cos(h); y += Math.sin(h); pts.push([x, y]); }
+      else h -= Math.PI / 3;
+    }
+    return pts;
+  }
+  function gaussPath(a0, b0) {
+    const isP = n => { if (n < 2) return false; if (n % 2 === 0) return n === 2; for (let d = 3; d * d <= n; d += 2) if (n % d === 0) return false; return true; };
+    const gp = (a, b) => a === 0 ? (Math.abs(b) % 4 === 3 && isP(Math.abs(b))) : b === 0 ? (Math.abs(a) % 4 === 3 && isP(Math.abs(a))) : isP(a * a + b * b);
+    let a = a0, b = b0, da = 1, db = 0;
+    const pts = [[a, -b]];
+    for (let i = 0; i < 200000; i++) {
+      a += da; b += db;
+      const turn = gp(a, b);
+      if (turn) { const t = da; da = -db; db = t; pts.push([a, -b]); }
+      if (a === a0 && b === b0 && da === 1 && db === 0) { if (!turn) pts.push([a, -b]); break; }
+    }
+    return pts;
+  }
+
   // ---------- 미리보기: 천천히 그려지는 애니메이션 ----------
   function setupPreview(canvas, pts, palette, colorOf) {
     const { colors } = NK.buildColors(palette, 1);
@@ -161,6 +215,14 @@
       setupPreview(cv, pts, 'aurora', (i, n) => Math.floor(i / n * K) % K);
     } else if (card.dataset.preview === 'recaman') {
       setupPreview(cv, recamanPath(70), 'sunset', (i, n) => Math.floor(i / n * K) % K);
+    } else if (card.dataset.preview === 'curlicue') {
+      setupPreview(cv, curlicuePath(), 'neon', (i, n) => Math.floor(i / n * K) % K);
+    } else if (card.dataset.preview === 'fibword') {
+      setupPreview(cv, fibwordPath(4181), 'aurora', (i, n) => Math.floor(i / n * K) % K);
+    } else if (card.dataset.preview === 'thuemorse') {
+      setupPreview(cv, thuemorsePath(8192), 'cyber', (i, n) => Math.floor(i / n * K) % K);
+    } else if (card.dataset.preview === 'gauss') {
+      setupPreview(cv, gaussPath(100, 53), 'neon', (i, n) => Math.floor(i / n * K) % K);
     } else {
       setupPreview(cv, dragonPts, 'cyber', i => {
         const g = i === 0 ? 0 : Math.floor(Math.log2(i)) + 1;

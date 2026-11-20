@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+  <title>GAUSSIAN PRIME SPIRAL — 가우스 소수 나선</title>
+  <link rel="stylesheet" href="../assets/common.css?v=20261120i">
+  <link rel="stylesheet" href="../assets/walk.css?v=20261120i">
+  <link rel="stylesheet" href="style.css?v=20261120i">
+</head>
+<body>
+  <div id="stage">
+    <canvas id="trail"></canvas>
+    <canvas id="overlay"></canvas>
+  </div>
+
+  <header id="hud">
+    <a class="back" href="../index.html">← 메인으로</a>
+    <div class="title">GAUSS<span>PRIMES</span></div>
+    <div id="tape"></div>
+    <div id="rule"></div>
+    <div class="stats">
+      <span id="statCount">0</span>번째 꺾임 ·
+      <span id="statZoom">100%</span> ·
+      <span id="statStatus">준비 중…</span>
+    </div>
+  </header>
+
+  <aside id="panel">
+    <button id="panelToggle" class="panel-toggle" title="패널 접기/펼치기">⟨</button>
+    <div class="panel-body">
+      <section>
+        <div class="row buttons">
+          <button id="btnPlay" class="primary" title="Space">⏸ 일시정지</button>
+          <button id="btnStep" title="→">한 걸음 ⏭</button>
+          <button id="btnReset" title="R">↺ 처음부터</button>
+        </div>
+      </section>
+
+      <section>
+        <label class="label">규칙</label>
+        <div class="hint rule-box">가로·세로 정수 격자를 복소수 <b>a + bi</b>로 봐요. 이 세계에도 소수가 있어요(<b>가우스 소수</b>: a²+b²이 소수이거나, 한쪽이 0이고 다른 쪽이 4k+3 꼴 소수).<br>
+          시작점에서 오른쪽으로 한 칸씩 가다가 <b>가우스 소수를 밟으면 왼쪽으로 90°</b> 꺾어요. 이걸 반복하면 —<br>
+          <b>언제나 출발점으로 돌아와서 닫힌 대칭 무늬</b>가 된다는 게 증명돼 있어요. 다만 몇 걸음 만에 닫힐지는 시작점마다 천차만별이에요.</div>
+      </section>
+
+      <section>
+        <label class="label">시작점</label>
+        <div class="presets" id="startPresets">
+          <button data-s="3,5">3+5i</button>
+          <button data-s="5,23">5+23i</button>
+          <button data-s="4,81">4+81i</button>
+          <button data-s="157,1">157+i</button>
+          <button data-s="100,53">100+53i</button>
+          <button data-s="28,137">28+137i</button>
+          <button data-s="124,25">124+25i</button>
+          <button data-s="277,232">277+232i 거대</button>
+        </div>
+        <div class="inline-inputs">
+          <input id="startA" type="number" step="1" value="5">
+          <span>+</span>
+          <input id="startB" type="number" step="1" value="23">
+          <span>i</span>
+          <button id="btnStart">그리기</button>
+        </div>
+        <div class="row buttons" style="margin-top:8px">
+          <button id="btnRandomStart">🎲 아무 시작점</button>
+        </div>
+        <div class="hint" id="startHint">a, b는 ±40000 안에서 골라주세요.</div>
+      </section>
+
+      <section>
+        <label class="label">속도 <span id="speedLabel" class="value"></span></label>
+        <input id="speed" type="range" min="0" max="100" step="0.5" value="45">
+        <div class="hint">느리면 거북이가 한 걸음씩 움직이는 게 보이고, 빠르면 한 번에 수천 걸음씩 그려요.</div>
+      </section>
+
+      <section>
+        <label class="label">카메라</label>
+        <div class="seg" id="camSeg">
+          <button data-cam="follow" title="F">따라가기</button>
+          <button data-cam="fit" class="on" title="A">전체 맞춤</button>
+          <button data-cam="free">자유</button>
+        </div>
+        <div class="hint">드래그로 이동 · 휠/핀치로 확대·축소 (조작하면 자유 모드로 바뀜)</div>
+      </section>
+
+      <section>
+        <label class="label">색칠 방식</label>
+        <div class="seg" id="cmSeg">
+          <button data-cm="order" class="on">그린 순서</button>
+          <button data-cm="zone">색 구역</button>
+        </div>
+
+        <label class="label" style="margin-top:14px">색 조합</label>
+        <select id="paletteSel">
+          <option value="neon">네온 무지개</option>
+          <option value="cyber">사이버펑크</option>
+          <option value="aurora">오로라</option>
+          <option value="sunset">선셋</option>
+          <option value="random">시드 랜덤 색</option>
+        </select>
+        <div id="gradBar" class="grad-bar"></div>
+
+        <div id="zoneBlock">
+          <label class="label" style="margin-top:14px">색 구역 크기 <span id="zoneLabel" class="value">1200</span></label>
+          <input id="zoneSize" type="range" min="200" max="8000" step="50" value="1200">
+          <label class="check"><input id="chkZones" type="checkbox"> 색 구역 희미하게 보기</label>
+        </div>
+
+        <label class="label" style="margin-top:14px">시드</label>
+        <div class="row seed-row">
+          <input id="seedInput" type="number" min="0" max="999999" step="1">
+          <button id="btnReseed" title="S">🎲 랜덤</button>
+        </div>
+        <label class="check"><input id="chkTurtle" type="checkbox" checked> 거북이 보이기</label>
+      </section>
+    </div>
+  </aside>
+
+  <div id="toast"></div>
+
+  <script src="../assets/neon-gl.js?v=20261120i"></script>
+  <script src="../assets/neon.js?v=20261120i"></script>
+  <script src="../assets/walk.js?v=20261120i"></script>
+  <script src="script.js?v=20261120i"></script>
+</body>
+</html>

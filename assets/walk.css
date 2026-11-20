@@ -1,0 +1,49 @@
+/* 거북이 산책 페이지 공통 (커리큘·피보나치 단어·투에-모스·가우스 소수) */
+
+#tape {
+  margin-top: 8px;
+  font-family: "JetBrains Mono", "Consolas", "D2Coding", monospace;
+  font-size: 16px;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+  overflow: hidden;
+  color: rgba(255, 255, 255, 0.4);
+  max-width: min(760px, 92vw);
+}
+#tape b {
+  display: inline-block;
+  min-width: 0.9em;
+  text-align: center;
+  font-size: 22px;
+  color: #fff;
+  text-shadow: 0 0 8px currentColor, 0 0 18px currentColor;
+}
+#tape .dim { color: rgba(255, 255, 255, 0.28); }
+#rule {
+  margin-top: 4px;
+  min-height: 1.4em;
+  font-family: "JetBrains Mono", "Consolas", "D2Coding", monospace;
+  font-size: 14px;
+  color: #d8d8e8;
+}
+#rule .hl { color: #00f0ff; text-shadow: 0 0 6px #00f0ff; }
+#rule .hl2 { color: #ff2bd6; text-shadow: 0 0 6px #ff2bd6; }
+
+.rule-box { font-size: 12.5px; line-height: 1.7; color: #c8c8da; }
+.rule-box b { color: #fff; }
+
+#zoneBlock.disabled { opacity: 0.35; pointer-events: none; }
+
+.presets { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.presets button { flex: 0 0 auto; padding: 6px 9px; font-size: 12px; }
+.presets button.on {
+  border-color: rgba(0, 240, 255, 0.8);
+  box-shadow: 0 0 10px rgba(0, 240, 255, 0.35);
+  color: #fff;
+}
+.inline-inputs { display: flex; gap: 6px; align-items: center; margin-top: 8px; }
+.inline-inputs input[type="number"], .inline-inputs input[type="text"], .inline-inputs input[type="date"] {
+  flex: 1 1 0;
+  min-width: 0;
+}
+.inline-inputs span { color: #c8c8da; font-size: 13px; }

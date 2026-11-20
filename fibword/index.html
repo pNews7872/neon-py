@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+  <title>FIBONACCI WORD — 피보나치 단어 프랙탈</title>
+  <link rel="stylesheet" href="../assets/common.css?v=20261120i">
+  <link rel="stylesheet" href="../assets/walk.css?v=20261120i">
+  <link rel="stylesheet" href="style.css?v=20261120i">
+</head>
+<body>
+  <div id="stage">
+    <canvas id="trail"></canvas>
+    <canvas id="overlay"></canvas>
+  </div>
+
+  <header id="hud">
+    <a class="back" href="../index.html">← 메인으로</a>
+    <div class="title">FIBONACCI<span>WORD</span></div>
+    <div id="tape"></div>
+    <div id="rule"></div>
+    <div class="stats">
+      <span id="statCount">0</span>번째 글자 ·
+      <span id="statZoom">100%</span> ·
+      <span id="statStatus">준비 중…</span>
+    </div>
+  </header>
+
+  <aside id="panel">
+    <button id="panelToggle" class="panel-toggle" title="패널 접기/펼치기">⟨</button>
+    <div class="panel-body">
+      <section>
+        <div class="row buttons">
+          <button id="btnPlay" class="primary" title="Space">⏸ 일시정지</button>
+          <button id="btnStep" title="→">한 걸음 ⏭</button>
+          <button id="btnReset" title="R">↺ 처음부터</button>
+        </div>
+      </section>
+
+      <section>
+        <label class="label">규칙</label>
+        <div class="hint rule-box"><b>0</b>과 <b>1</b>로 된 피보나치 단어를 만들어요: <b>0</b>, <b>01</b>, <b>010</b>, <b>01001</b>, … (앞의 두 단어를 이어 붙이기).<br>
+          그다음 글자를 하나씩 읽으면서 <b>한 칸 앞으로 긋고</b>, 글자가 <b>0</b>이면 <b>짝수 번째일 때 왼쪽, 홀수 번째일 때 오른쪽</b>으로 꺾어요. 1이면 그냥 직진.<br>
+          글자 수가 피보나치 수(…, 4181, 6765, 10946, …)가 될 때마다 그림이 딱 완성된 모양이 돼요.</div>
+      </section>
+
+      <section>
+        <label class="label">꺾는 각도 <span id="angLabel" class="value">90°</span></label>
+        <input id="ang" type="range" min="1" max="179" step="1" value="90">
+        <div class="presets" id="angPresets">
+          <button data-a="90">90° 원조</button>
+          <button data-a="60">60°</button>
+          <button data-a="72">72°</button>
+          <button data-a="120">120°</button>
+          <button data-a="150">150°</button>
+        </div>
+        <div class="hint">각도를 바꾸면 지금까지 그린 만큼 바로 다시 그려요. 90°는 정사각형 프랙탈, 120°는 격자 무늬가 돼요.</div>
+      </section>
+
+      <section>
+        <label class="label">속도 <span id="speedLabel" class="value"></span></label>
+        <input id="speed" type="range" min="0" max="100" step="0.5" value="46">
+        <div class="hint">느리면 거북이가 한 걸음씩 움직이는 게 보이고, 빠르면 한 번에 수천 걸음씩 그려요.</div>
+      </section>
+
+      <section>
+        <label class="label">카메라</label>
+        <div class="seg" id="camSeg">
+          <button data-cam="follow" title="F">따라가기</button>
+          <button data-cam="fit" class="on" title="A">전체 맞춤</button>
+          <button data-cam="free">자유</button>
+        </div>
+        <div class="hint">드래그로 이동 · 휠/핀치로 확대·축소 (조작하면 자유 모드로 바뀜)</div>
+      </section>
+
+      <section>
+        <label class="label">색칠 방식</label>
+        <div class="seg" id="cmSeg">
+          <button data-cm="order" class="on">그린 순서</button>
+          <button data-cm="zone">색 구역</button>
+        </div>
+
+        <label class="label" style="margin-top:14px">색 조합</label>
+        <select id="paletteSel">
+          <option value="neon">네온 무지개</option>
+          <option value="cyber">사이버펑크</option>
+          <option value="aurora">오로라</option>
+          <option value="sunset">선셋</option>
+          <option value="random">시드 랜덤 색</option>
+        </select>
+        <div id="gradBar" class="grad-bar"></div>
+
+        <div id="zoneBlock">
+          <label class="label" style="margin-top:14px">색 구역 크기 <span id="zoneLabel" class="value">1200</span></label>
+          <input id="zoneSize" type="range" min="200" max="8000" step="50" value="1200">
+          <label class="check"><input id="chkZones" type="checkbox"> 색 구역 희미하게 보기</label>
+        </div>
+
+        <label class="label" style="margin-top:14px">시드</label>
+        <div class="row seed-row">
+          <input id="seedInput" type="number" min="0" max="999999" step="1">
+          <button id="btnReseed" title="S">🎲 랜덤</button>
+        </div>
+        <label class="check"><input id="chkTurtle" type="checkbox" checked> 거북이 보이기</label>
+      </section>
+    </div>
+  </aside>
+
+  <div id="toast"></div>
+
+  <script src="../assets/neon-gl.js?v=20261120i"></script>
+  <script src="../assets/neon.js?v=20261120i"></script>
+  <script src="../assets/walk.js?v=20261120i"></script>
+  <script src="script.js?v=20261120i"></script>
+</body>
+</html>

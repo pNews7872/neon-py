@@ -1,0 +1,4 @@
+/* FIBONACCI WORD 전용 스타일 (공통: ../assets/common.css, ../assets/walk.css) */
+
+.title { text-shadow: 0 0 10px #7dff4a, 0 0 26px #00b36b; }
+.title span { color: #00f0ff; text-shadow: 0 0 8px #00f0ff; }

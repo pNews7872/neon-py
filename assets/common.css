@@ -222,7 +222,7 @@ input[type="range"]::-moz-range-thumb {
   color: #fff;
 }
 
-select, input[type="number"] {
+select, input[type="number"], input[type="text"], input[type="date"] {
   font: inherit;
   font-size: 13px;
   color: var(--text);
@@ -234,8 +234,8 @@ select, input[type="number"] {
   width: 100%;
 }
 select option { background: #111; color: var(--text); }
-select:focus, input[type="number"]:focus { border-color: rgba(0, 240, 255, 0.5); }
-input[type="number"] { font-family: "Consolas", monospace; user-select: text; }
+select:focus, input[type="number"]:focus, input[type="text"]:focus, input[type="date"]:focus { border-color: rgba(0, 240, 255, 0.5); }
+input[type="number"], input[type="text"], input[type="date"] { font-family: "Consolas", monospace; user-select: text; color-scheme: dark; }
 .seed-row input { flex: 1.6; }
 .seed-row button { flex: 1; }
 .grad-bar {

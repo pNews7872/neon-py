@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+  <title>CURLICUE — 지수합 소용돌이 네온 드로잉</title>
+  <link rel="stylesheet" href="../assets/common.css?v=20261120i">
+  <link rel="stylesheet" href="../assets/walk.css?v=20261120i">
+  <link rel="stylesheet" href="style.css?v=20261120i">
+</head>
+<body>
+  <div id="stage">
+    <canvas id="trail"></canvas>
+    <canvas id="overlay"></canvas>
+  </div>
+
+  <header id="hud">
+    <a class="back" href="../index.html">← 메인으로</a>
+    <div class="title">CURLI<span>CUE</span></div>
+    <div id="tape"></div>
+    <div id="rule"></div>
+    <div class="stats">
+      <span id="statCount">0</span>번째 걸음 ·
+      <span id="statZoom">100%</span> ·
+      <span id="statStatus">준비 중…</span>
+    </div>
+  </header>
+
+  <aside id="panel">
+    <button id="panelToggle" class="panel-toggle" title="패널 접기/펼치기">⟨</button>
+    <div class="panel-body">
+      <section>
+        <div class="row buttons">
+          <button id="btnPlay" class="primary" title="Space">⏸ 일시정지</button>
+          <button id="btnStep" title="→">한 걸음 ⏭</button>
+          <button id="btnReset" title="R">↺ 처음부터</button>
+        </div>
+      </section>
+
+      <section>
+        <label class="label">규칙</label>
+        <div class="hint rule-box">매 걸음 길이 1로 앞으로 가는데, <b>n번째 걸음의 방향</b>을 <b>θ = π·s·n²</b> 로 정해요.
+          s가 유리수면 언젠가 같은 방향이 반복돼서 대칭 무늬가 되고, <b>π·e·황금비</b> 같은 무리수면 헤매다가 갑자기 거대한 소용돌이를 만들어요.<br>
+          <b>오늘의 그림</b>은 각도를 <b>n/월 + n²/일 + n³/연도</b> 바퀴로 정해서, 날짜마다 다른 만다라가 나와요.</div>
+      </section>
+
+      <section>
+        <label class="label">무엇으로 그릴까</label>
+        <div class="seg" id="modeSeg">
+          <button data-mode="const" class="on">상수 s</button>
+          <button data-mode="date">오늘의 그림</button>
+        </div>
+
+        <div id="constBlock">
+          <div class="presets" id="constPresets">
+            <button data-c="pi">π</button>
+            <button data-c="e">e</button>
+            <button data-c="phi">φ 황금비</button>
+            <button data-c="sqrt2">√2</button>
+            <button data-c="sqrt3">√3</button>
+            <button data-c="ln2">ln 2</button>
+            <button data-c="gamma">γ 오일러</button>
+            <button data-c="frac">13/31</button>
+          </div>
+          <div class="inline-inputs">
+            <span>s =</span>
+            <input id="customS" type="text" spellcheck="false" placeholder="예: 0.618 또는 5/17">
+            <button id="btnCustom">그리기</button>
+          </div>
+          <div class="hint">소수나 분수(예: 7/22)를 넣어도 돼요. π 같은 상수는 36자리까지 정확하게 계산해서 수백만 걸음 뒤에도 각도가 틀어지지 않아요.</div>
+        </div>
+
+        <div id="dateBlock" style="display:none">
+          <div class="inline-inputs">
+            <button id="datePrev" title="[">◀</button>
+            <input id="dateIn" type="date">
+            <button id="dateNext" title="]">▶</button>
+          </div>
+          <div class="row buttons" style="margin-top:8px">
+            <button id="dateToday">오늘</button>
+            <button id="dateRandom">🎲 아무 날</button>
+          </div>
+          <div class="hint" id="dateHint"></div>
+        </div>
+      </section>
+
+      <section>
+        <label class="label">속도 <span id="speedLabel" class="value"></span></label>
+        <input id="speed" type="range" min="0" max="100" step="0.5" value="50">
+        <div class="hint">느리면 거북이가 한 걸음씩 움직이는 게 보이고, 빠르면 한 번에 수천 걸음씩 그려요.</div>
+      </section>
+
+      <section>
+        <label class="label">카메라</label>
+        <div class="seg" id="camSeg">
+          <button data-cam="follow" title="F">따라가기</button>
+          <button data-cam="fit" class="on" title="A">전체 맞춤</button>
+          <button data-cam="free">자유</button>
+        </div>
+        <div class="hint">드래그로 이동 · 휠/핀치로 확대·축소 (조작하면 자유 모드로 바뀜)</div>
+      </section>
+
+      <section>
+        <label class="label">색칠 방식</label>
+        <div class="seg" id="cmSeg">
+          <button data-cm="order" class="on">그린 순서</button>
+          <button data-cm="zone">색 구역</button>
+        </div>
+
+        <label class="label" style="margin-top:14px">색 조합</label>
+        <select id="paletteSel">
+          <option value="neon">네온 무지개</option>
+          <option value="cyber">사이버펑크</option>
+          <option value="aurora">오로라</option>
+          <option value="sunset">선셋</option>
+          <option value="random">시드 랜덤 색</option>
+        </select>
+        <div id="gradBar" class="grad-bar"></div>
+
+        <div id="zoneBlock">
+          <label class="label" style="margin-top:14px">색 구역 크기 <span id="zoneLabel" class="value">1200</span></label>
+          <input id="zoneSize" type="range" min="200" max="8000" step="50" value="1200">
+          <label class="check"><input id="chkZones" type="checkbox"> 색 구역 희미하게 보기</label>
+        </div>
+
+        <label class="label" style="margin-top:14px">시드</label>
+        <div class="row seed-row">
+          <input id="seedInput" type="number" min="0" max="999999" step="1">
+          <button id="btnReseed" title="S">🎲 랜덤</button>
+        </div>
+        <label class="check"><input id="chkTurtle" type="checkbox" checked> 거북이 보이기</label>
+      </section>
+    </div>
+  </aside>
+
+  <div id="toast"></div>
+
+  <script src="../assets/neon-gl.js?v=20261120i"></script>
+  <script src="../assets/neon.js?v=20261120i"></script>
+  <script src="../assets/walk.js?v=20261120i"></script>
+  <script src="script.js?v=20261120i"></script>
+</body>
+</html>

@@ -1,0 +1,4 @@
+/* CURLICUE 전용 스타일 (공통: ../assets/common.css, ../assets/walk.css) */
+
+.title { text-shadow: 0 0 10px #00f0ff, 0 0 26px #0066ff; }
+.title span { color: #ffe600; text-shadow: 0 0 8px #ffe600; }
