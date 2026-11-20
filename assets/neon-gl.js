@@ -339,6 +339,21 @@ void main() {
             c.n++; total++;
           }
         },
+        // 매 프레임 통째로 바꾸는 선분 목록 (화면 좌표처럼 작은 값일 때). 묶음은 재사용하고 덩어리째 복사
+        setSegs(arr, cols, count) {
+          let used = 0;
+          for (let off = 0; off < count; off += CHUNK) {
+            const c = chunks[used] || newChunk(0, 0);
+            const n = Math.min(CHUNK, count - off);
+            c.ox = 0; c.oy = 0;
+            c.data.set(arr.subarray(off * 4, (off + n) * 4));
+            c.cols.set(cols.subarray(off, off + n));
+            c.n = n; c.dirtyFrom = 0; c.colDirty = false;
+            used++;
+          }
+          for (let i = used; i < chunks.length; i++) { chunks[i].n = 0; chunks[i].dirtyFrom = 0; }
+          total = count;
+        },
         // 버퍼는 남겨두고 내용만 비움 (매 프레임 다시 채우는 레이어용)
         clear() {
           while (chunks.length > 1) { const c = chunks.pop(); gl.deleteBuffer(c.buf); gl.deleteBuffer(c.colBuf); gl.deleteVertexArray(c.vao); }

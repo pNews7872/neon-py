@@ -47,3 +47,25 @@
   min-width: 0;
 }
 .inline-inputs span { color: #c8c8da; font-size: 13px; }
+
+/* 한 걸음씩 / 무한 확대 탭 (드래곤과 같은 모양) */
+.mode-tabs a {
+  flex: 1;
+  text-align: center;
+  padding: 9px 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--dim);
+  text-decoration: none;
+  transition: background 0.15s, color 0.15s;
+}
+.mode-tabs a + a { border-left: 1px solid var(--line); }
+.mode-tabs a:not(.on):hover { background: rgba(255, 255, 255, 0.08); color: #fff; }
+.mode-tabs a.on {
+  color: #fff;
+  background: rgba(0, 240, 255, 0.16);
+  text-shadow: 0 0 8px var(--accent);
+  cursor: default;
+}
+
+#stage { touch-action: none; cursor: grab; }

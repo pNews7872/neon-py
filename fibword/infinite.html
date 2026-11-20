@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+  <title>FIBONACCI WORD ∞ — 무한 확대</title>
+  <link rel="stylesheet" href="../assets/common.css?v=20261120j">
+  <link rel="stylesheet" href="../assets/walk.css?v=20261120j">
+  <link rel="stylesheet" href="style.css?v=20261120j">
+</head>
+<body>
+  <div id="stage">
+    <canvas id="gl"></canvas>
+  </div>
+
+  <header id="hud">
+    <a class="back" href="../index.html">← 메인으로</a>
+    <div class="title">FIBONACCI<span>WORD ∞</span></div>
+    <div id="tape"><span class="dim">배율</span> <b id="zoomNow" style="color:#fff">×1</b></div>
+    <div class="stats">
+      <span id="statLeaves">준비 중</span> ·
+      <span id="statStatus">준비</span>
+    </div>
+  </header>
+
+  <aside id="panel">
+    <button id="panelToggle" class="panel-toggle" title="패널 접기/펼치기">⟨</button>
+    <div class="panel-body">
+      <section>
+        <div class="seg mode-tabs">
+          <a href="index.html" id="linkFinite">한 걸음씩</a>
+          <a class="on">무한 확대 ∞</a>
+        </div>
+      </section>
+
+      <section>
+        <label class="label">꺾는 각도 <span id="angLabel" class="value">90°</span></label>
+        <input id="ang" type="range" min="1" max="101" step="1" value="90">
+        <div class="presets" id="angPresets">
+          <button data-a="90">90° 원조</button>
+          <button data-a="60">60°</button>
+          <button data-a="72">72°</button>
+          <button data-a="30">30°</button>
+          <button data-a="100">100°</button>
+        </div>
+        <div class="hint" id="shapeInfo"></div>
+        <div class="hint">피보나치 단어는 1°~101° 어느 각도든 정확한 자기닮음이에요(그보다 크면 조각이 겹쳐 면을 채워요). 슬라이더를 움직이면 바로 다른 프랙탈로 바뀌어요.</div>
+      </section>
+
+      <section>
+        <label class="label">자동 움직임</label>
+        <div class="seg" id="autoSeg">
+          <button data-auto="out">계속 축소</button>
+          <button data-auto="stop">멈춤</button>
+          <button data-auto="in" class="on">계속 확대</button>
+        </div>
+        <label class="label" style="margin-top:12px">속도 <span id="zspeedLabel" class="value"></span></label>
+        <input id="zspeed" type="range" min="0" max="100" step="0.5" value="45">
+        <label class="check"><input id="chkLoop" type="checkbox" checked> 무한 루프 (고정점 중심, 끊김 없음)</label>
+        <div class="hint">켜면 곡선 속 '확대해도 제자리인 점'을 화면 정중앙에 두고 끝없이 확대·축소해요. 드래그·휠로 움직이면 꺼지고 자유롭게 돌아다닐 수 있어요.</div>
+        <label class="check" id="counterRow"><input id="chkCounter" type="checkbox" checked> 회전 보정 (루프에서 그림이 돌지 않게)</label>
+        <div class="row buttons" style="margin-top:8px"><button id="btnHome" title="H">⌂ 고정점으로 돌아가기</button></div>
+      </section>
+
+      <section>
+        <label class="label">디테일 (선 하나 길이) <span id="leafLabel" class="value">3px</span></label>
+        <input id="leaf" type="range" min="1.5" max="16" step="0.5" value="3">
+        <div class="hint">작을수록 촘촘하고 무거워요. 선이 너무 많아지면 자동으로 조금 굵게 그려요.</div>
+      </section>
+
+      <section>
+        <label class="label">색 조합</label>
+        <select id="paletteSel">
+          <option value="neon">네온 무지개</option>
+          <option value="cyber">사이버펑크</option>
+          <option value="aurora">오로라</option>
+          <option value="sunset">선셋</option>
+          <option value="random">시드 랜덤 색</option>
+        </select>
+        <div id="gradBar" class="grad-bar"></div>
+        <label class="label" style="margin-top:14px">시드</label>
+        <div class="row seed-row">
+          <input id="seedInput" type="number" min="0" max="999999" step="1">
+          <button id="btnReseed" title="S">🎲 랜덤</button>
+        </div>
+        <div class="hint">색은 덩어리 속 위치로 정해져서, 확대해도 같은 곳은 같은 색이에요.</div>
+      </section>
+
+      <section>
+        <div class="hint">드래그 이동 · 휠/핀치 확대·축소 · <b>Space</b> 멈춤 · <b>I</b>/<b>O</b> 확대/축소 · <b>H</b> 고정점</div>
+      </section>
+    </div>
+  </aside>
+
+  <div id="toast"></div>
+
+  <script src="../assets/neon-gl.js?v=20261120j"></script>
+  <script src="../assets/neon.js?v=20261120j"></script>
+  <script src="../assets/ifszoom.js?v=20261120j"></script>
+  <script src="infinite.js?v=20261120j"></script>
+</body>
+</html>

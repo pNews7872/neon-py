@@ -63,6 +63,7 @@
   const presets = [...document.querySelectorAll('#angPresets button')];
   function syncAngUi() {
     angIn.value = angle; angLabel.textContent = angle + '°';
+    document.getElementById('linkInf').href = 'infinite.html?ang=' + angle;
     presets.forEach(b => b.classList.toggle('on', +b.dataset.a === angle));
   }
   let t = 0;
