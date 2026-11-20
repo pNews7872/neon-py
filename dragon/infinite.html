@@ -46,8 +46,9 @@
         <div class="hint" id="autoHint"></div>
         <label class="label" style="margin-top:12px">속도 <span id="zspeedLabel" class="value">0.5배/초</span></label>
         <input id="zspeed" type="range" min="0" max="100" step="0.5" value="40">
-        <label class="check"><input id="chkFollow" type="checkbox" checked> 계속 확대할 때 곡선 따라가기</label>
-        <div class="hint">확대·축소는 화면 정중앙(＋ 표시)을 기준으로 해요. 원하는 곳을 드래그로 가운데에 두세요. 곡선 따라가기를 끄면 정중앙에서 조금도 움직이지 않아요.</div>
+        <label class="check"><input id="chkLoop" type="checkbox" checked> 무한 루프 (시작점 중심, 끊김 없음)</label>
+        <div class="hint">켜면 곡선의 시작점을 화면 정중앙에 두고, 그림 한 장으로 끝없이 반복해요. 끄면 지금 화면 정중앙(＋)을 기준으로 실시간으로 그리며 움직여요.</div>
+        <label class="check"><input id="chkFollow" type="checkbox" checked> 루프를 끈 채 계속 확대할 때 곡선 따라가기</label>
       </section>
 
       <section>

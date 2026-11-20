@@ -198,7 +198,9 @@
         const r = Math.sqrt(L2) * R + pad;
         if (mx + r < 0 || mx - r > w || my + r < 0 || my - r > h) return;   // 화면 밖: 통째로 건너뜀
         if (L2 <= thr2 || leaves >= m.maxLeaves) {
-          leaf(ax, ay, bx, by, depthMode ? dcol(cnt) : gcol(H === NONE ? lv : H));
+          // relGen: 무한 루프용. 세대를 "선 크기 기준 상대값"으로 칠해서 2배 확대해도 색이 똑같음
+          const g = H === NONE ? lv : H;
+          leaf(ax, ay, bx, by, depthMode ? dcol(cnt) : gcol(m.relGen ? g - lv : g));
           return;
         }
         const qx = mx - sig * dy * 0.5, qy = my + sig * dx * 0.5;          // 꺾이는 점
@@ -241,7 +243,7 @@
         ctx.globalAlpha = 1;
       }
       const bitmap = canvas.transferToImageBitmap ? canvas.transferToImageBitmap() : canvas;
-      const out = { id: m.id, leaves, bitmap, w: m.w, h: m.h };
+      const out = { id: m.id, kind: m.kind, leaves, bitmap, w: m.w, h: m.h };
       if (canvas.transferToImageBitmap) port.postMessage(out, [bitmap]); else port.postMessage(out);
     };
   }
@@ -352,6 +354,7 @@
   }
 
   renderer.h.onResult = (m) => {
+    if (m.kind === 'loop') { onLoopResult(m); return; }
     inflight = false;
     if (m.id !== renderId || !pendingView) { if (m.bitmap.close) m.bitmap.close(); return; }
     if (buf.width !== m.w || buf.height !== m.h) { buf.width = m.w; buf.height = m.h; }
@@ -493,6 +496,7 @@
   // 처음 위치: 세대 12 곡선 전체가 보이게
   // ---------------------------------------------------------
   function goHome() {
+    zoomOffset = 0; looping = false; loop.hold = false; loop.n = 0;
     frame.level = 12; frame.bits = []; frame.cnt = [0]; frame.firstOne = -1;
     bufView = null; pendingView = null; renderId++; inflight = false;
     // 왼쪽 사슬 12세대 선분 (0,0)→(1,0)의 곡선 범위를 계산해서 화면에 맞춤
@@ -524,6 +528,151 @@
   }
 
   // ---------------------------------------------------------
+  // 무한 루프 (시작점 중심)
+  // 드래곤 커브는 시작점을 중심으로 2배 확대하면 90° 돌아간 똑같은 그림이 된다.
+  // → 그림을 한 장만 그려 두고, 바깥은 그 그림을 확대해서, 가운데는 같은 그림을
+  //   절반 크기로 줄이고 90° 돌려서 겹쳐 그리면 새로 그리지 않고도 끝없이 확대·축소된다.
+  // ---------------------------------------------------------
+  const LOOP_R = 1.25;          // 루프 그림 반지름 = 화면 반대각선 × 이 값
+  const LOOP_Q = 1.2;           // 루프 그림 해상도 여유 (확대돼도 덜 흐리게)
+  let loopOn = params.get('loop') !== '0';
+  const loop = {
+    f: 0, n: 0,                  // 배율 = 2^(n+f), f는 0~1
+    s0: 300,                     // f=0일 때 프레임 단위 크기 (CSS px)
+    img: document.createElement('canvas'),
+    ready: false, key: '', reqId: 0, inflight: false, pendingKey: '',
+    hold: false,                 // 루프를 끝낸 직후 자유 모드 그림이 올 때까지 루프 그림 유지
+  };
+  const tmpA = document.createElement('canvas'), tmpACtx = tmpA.getContext('2d');
+  const tmpB = document.createElement('canvas'), tmpBCtx = tmpB.getContext('2d');
+  let zoomOffset = 0;            // 루프를 거치며 생략된 배율(표시용)
+  let looping = false;
+
+  const wantLoop = () => loopOn && autoMode !== 'stop';
+  const loopKey = () => [color.paletteKey, color.seed, colorMode, leafPx, gs, view.W, view.H, view.DPR].join('|');
+
+  function enterLoop() {
+    looping = true;
+    // 왼쪽 사슬(시작점에서 무한히 커지는 선분들) 위의 프레임, 시작점 = (0,0)
+    frame.level = 0; frame.bits = []; frame.cnt = [0]; frame.firstOne = -1;
+    bufView = null; pendingView = null; renderId++; inflight = false;
+    loop.s0 = Math.min(view.W, view.H) * 0.45;
+    // 현재 배율의 소수 부분은 이어 가고, 정수 부분은 표시용으로만 기억
+    const z = absZoom() + zoomOffset;
+    loop.n = Math.floor(z - Math.log2(loop.s0));
+    loop.f = z - Math.log2(loop.s0) - loop.n;
+    zoomOffset = 0;
+    cam.x = 0; cam.y = 0; cam.s = loop.s0 * Math.pow(2, loop.f);
+    loop.hold = false;
+    if (loop.key !== loopKey()) requestLoopImage();
+    dirty = true;
+  }
+
+  // 루프 끝: 지금 보이는 그림과 똑같은 자유 모드 상태로 넘겨줌
+  function exitLoop() {
+    looping = false;
+    cam.x = 0; cam.y = 0;
+    cam.s = loop.s0 * Math.pow(2, loop.f);
+    cam.rot = (cam.rot + loop.n * gs * Math.PI / 2) % (Math.PI * 2);
+    zoomOffset += loop.n;
+    loop.n = 0;
+    loop.hold = loop.ready;
+    forceRender = true;
+    rebase();
+    dirty = true;
+  }
+
+  function requestLoopImage() {
+    if (loop.inflight) { loop.pendingKey = 'again'; return; }
+    const halfDiag = Math.hypot(view.W, view.H) / 2 * view.DPR;
+    let side = Math.round(2 * LOOP_R * halfDiag * LOOP_Q);
+    side = Math.min(side, Math.floor(Math.sqrt(48e6)), 12000);
+    const q = side / (2 * LOOP_R * halfDiag);             // 실제 해상도 여유
+    const sDev = loop.s0 * view.DPR * q;                   // f=0 배율 × 여유
+    // 왼쪽 사슬 프레임(레벨 0) 기준으로 화면을 덮는 조상 찾기
+    const saved = { level: frame.level, bits: frame.bits, cnt: frame.cnt, firstOne: frame.firstOne };
+    frame.level = 0; frame.bits = []; frame.cnt = [0]; frame.firstOne = -1;
+    const v = { x: 0, y: 0, s: sDev / view.DPR, rot: 0 };
+    const root = findRoot(v, (side * Math.SQRT1_2) / sDev);
+    Object.assign(frame, saved);
+    const map = makeMap(v, sDev, side / 2, side / 2);
+    const [ax, ay] = map(root.ax, root.ay);
+    const [bx, by] = map(root.bx, root.by);
+    loop.reqId++;
+    loop.inflight = true;
+    loop.pendingKey = loopKey();
+    loop.q = q;
+    renderer.post({
+      id: loop.reqId, kind: 'loop', w: side, h: side, relGen: true,
+      root: { ax, ay, bx, by, sign: root.sign, level: root.level, count: root.count, H: root.H },
+      gs, thr: leafPx * view.DPR * q, radius: RADIUS, pad: 6 * view.DPR,
+      glow: 5 * view.DPR, core: 1.3 * view.DPR,
+      colors: color.colors, colorsRgb: color.rgb, mode: colorMode, genStep: GEN_STEP, depthStep: DEPTH_STEP,
+      maxLeaves: MAX_LEAVES,
+    });
+  }
+
+  function onLoopResult(m) {
+    loop.inflight = false;
+    const again = loop.pendingKey === 'again' || loop.pendingKey !== loopKey();
+    if (m.id === loop.reqId && !again) {
+      const c = loop.img;
+      if (c.width !== m.w || c.height !== m.h) { c.width = m.w; c.height = m.h; }
+      const cx = c.getContext('2d');
+      cx.clearRect(0, 0, m.w, m.h);
+      cx.drawImage(m.bitmap, 0, 0);
+      loop.ready = true;
+      loop.key = loopKey();
+      loop.qReady = loop.q;
+      lastLeaves = m.leaves;
+      dirty = true;
+    }
+    if (m.bitmap.close) m.bitmap.close();
+    if (again) requestLoopImage();
+  }
+
+  // 한 레이어: 루프 그림을 배율 k, 회전 rot로 화면 중앙에 그림
+  function drawLoopLayer(ctx, k, rot) {
+    const img = loop.img;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+    ctx.translate(trail.width / 2, trail.height / 2);
+    ctx.rotate(rot);
+    ctx.scale(k, k);
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = k < 1 ? 'high' : 'low';
+    ctx.drawImage(img, -img.width / 2, -img.height / 2);
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+  }
+
+  function compositeLoop() {
+    tCtx.setTransform(1, 0, 0, 1, 0, 0);
+    tCtx.clearRect(0, 0, trail.width, trail.height);
+    if (!loop.ready) return;
+    for (const c of [tmpA, tmpB]) if (c.width !== trail.width || c.height !== trail.height) { c.width = trail.width; c.height = trail.height; }
+    const f = looping ? loop.f : Math.log2(cam.s / loop.s0);
+    const n = looping ? loop.n : 0;
+    const phi = cam.rot + n * gs * Math.PI / 2;
+    const kA = Math.pow(2, f) / loop.qReady;               // 바깥: 그림을 확대
+    const kB = kA / 2;                                      // 가운데: 절반 크기 + 90° 회전 (= 같은 그림)
+    const rB = (loop.img.width / 2) * kB;
+    const cx = trail.width / 2, cy = trail.height / 2;
+    const mask = (ctx) => {
+      const g = ctx.createRadialGradient(cx, cy, rB * 0.72, cx, cy, rB * 0.98);
+      g.addColorStop(0, 'rgba(0,0,0,1)'); g.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, trail.width, trail.height);
+      ctx.globalCompositeOperation = 'source-over';
+    };
+    drawLoopLayer(tmpACtx, kA, phi);
+    tmpACtx.globalCompositeOperation = 'destination-out'; mask(tmpACtx);   // 바깥만 남김
+    drawLoopLayer(tmpBCtx, kB, phi + gs * Math.PI / 2);
+    tmpBCtx.globalCompositeOperation = 'destination-in'; mask(tmpBCtx);    // 가운데만 남김
+    tCtx.drawImage(tmpA, 0, 0);
+    tCtx.drawImage(tmpB, 0, 0);
+  }
+
+  // ---------------------------------------------------------
   // 메인 루프
   // ---------------------------------------------------------
   let lastT = performance.now();
@@ -531,21 +680,39 @@
     const dt = Math.min(0.1, (now - lastT) / 1000);
     lastT = now;
 
-    if (!paused && autoMode !== 'stop') {
-      const f = Math.pow(2, (autoMode === 'in' ? 1 : -1) * zoomSpeed * dt);
-      const cx = view.W / 2, cy = view.H / 2;           // 화면 정중앙을 기준으로
-      zoomAt(cx, cy, f);
-      if (autoMode === 'in' && followCurve) {
-        // 화면 가운데를 곡선 위로 천천히 끌어당김
-        const [ccx, ccy] = screenToFrame(cx, cy);
-        const [tx, ty] = nearestCurvePoint(ccx, ccy);
-        const k = 1 - Math.exp(-dt * 2.5);
-        cam.x += (tx - ccx) * k; cam.y += (ty - ccy) * k;
-      }
-    }
+    if (wantLoop() && !looping) enterLoop();
+    else if (!wantLoop() && looping) exitLoop();
 
-    if (needsRender()) requestRender();
-    if (dirty) { composite(); dirty = false; }
+    if (looping) {
+      // 무한 루프: 새로 그리지 않고 배율만 바꿈
+      if (!paused) {
+        const dz = (autoMode === 'in' ? 1 : -1) * zoomSpeed * dt;
+        loop.f += dz;
+        if (counterRotate) cam.rot += -gs * (Math.PI / 2) * dz;
+        while (loop.f >= 1) { loop.f -= 1; loop.n++; }
+        while (loop.f < 0) { loop.f += 1; loop.n--; }
+        cam.s = loop.s0 * Math.pow(2, loop.f);
+      }
+      if ((!loop.ready || loop.key !== loopKey()) && !loop.inflight) requestLoopImage();
+      compositeLoop();
+    } else {
+      if (!paused && autoMode !== 'stop') {
+        const f = Math.pow(2, (autoMode === 'in' ? 1 : -1) * zoomSpeed * dt);
+        const cx = view.W / 2, cy = view.H / 2;           // 화면 정중앙을 기준으로
+        zoomAt(cx, cy, f);
+        if (autoMode === 'in' && followCurve) {
+          // 화면 가운데를 곡선 위로 천천히 끌어당김
+          const [ccx, ccy] = screenToFrame(cx, cy);
+          const [tx, ty] = nearestCurvePoint(ccx, ccy);
+          const k = 1 - Math.exp(-dt * 2.5);
+          cam.x += (tx - ccx) * k; cam.y += (ty - ccy) * k;
+        }
+      }
+      if (needsRender()) requestRender();
+      if (loop.hold && bufView) loop.hold = false;
+      if (loop.hold) compositeLoop();
+      else if (dirty) { composite(); dirty = false; }
+    }
     drawCrosshair();
     updateHud();
     requestAnimationFrame(frameLoop);
@@ -576,7 +743,7 @@
   const elStatus = document.getElementById('statStatus');
   let hudKey = '';
   function updateHud() {
-    const z = absZoom() - absZoom0;
+    const z = absZoom() + zoomOffset + (looping ? loop.n : 0) - absZoom0;
     const key = z.toFixed(1) + '|' + lastLeaves + '|' + autoMode + paused + color.paletteKey + color.seed;
     if (key === hudKey) return;
     hudKey = key;
@@ -592,9 +759,13 @@
     out: '곡선이 끝없이 펼쳐지며 멀어져요.',
     stop: '마우스로 자유롭게 확대·축소해 보세요. 끝이 없어요.',
     in: '화면 가운데의 곡선 속으로 끝없이 파고들어요.',
+    loop: '시작점을 중심으로 끊김 없이 무한 반복돼요. 새로 그리지 않아서 아주 부드러워요.',
   };
+  function updateAutoHint() {
+    autoHint.textContent = autoMode !== 'stop' && loopOn ? AUTO_HINT.loop : AUTO_HINT[autoMode];
+  }
   const setAutoSeg = NK.bindSeg(document.getElementById('autoSeg'), 'auto', a => {
-    autoMode = a; paused = false; setAutoSeg(a); autoHint.textContent = AUTO_HINT[a]; syncUrl();
+    autoMode = a; paused = false; setAutoSeg(a); updateAutoHint(); syncUrl();
   });
 
   const zsIn = document.getElementById('zspeed');
@@ -604,6 +775,9 @@
     zsLabel.textContent = `${Math.pow(2, zoomSpeed).toFixed(2)}배/초`;
   }
   zsIn.addEventListener('input', updateZoomSpeed);
+
+  const chkLoop = document.getElementById('chkLoop');
+  chkLoop.addEventListener('change', () => { loopOn = chkLoop.checked; updateAutoHint(); syncUrl(); });
 
   const chkFollow = document.getElementById('chkFollow');
   chkFollow.addEventListener('change', () => { followCurve = chkFollow.checked; syncUrl(); });
@@ -617,13 +791,13 @@
   leafIn.addEventListener('input', () => {
     leafLabel.textContent = leafIn.value + 'px';
     clearTimeout(leafTimer);
-    leafTimer = setTimeout(() => { leafPx = parseFloat(leafIn.value); forceRender = true; syncUrl(); }, 100);
+    leafTimer = setTimeout(() => { leafPx = parseFloat(leafIn.value); forceRender = true; loop.key = ''; syncUrl(); }, 100);
   });
 
   const setDirSeg = NK.bindSeg(document.getElementById('dirSeg'), 'dir', d => {
     const s = d === 'ccw' ? -1 : 1;
     if (s === gs) return;
-    gs = s; setDirSeg(d); goHome(); syncUrl();
+    gs = s; setDirSeg(d); loop.key = ''; loop.ready = false; goHome(); syncUrl();
   });
 
   const cmHint = document.getElementById('colorModeHint');
@@ -632,11 +806,11 @@
     gen: '세대 모드처럼, 어느 세대에서 복사된 부분인지에 따라 색이 정해져요.',
   };
   const setCmSeg = NK.bindSeg(document.getElementById('colorModeSeg'), 'cm', cm => {
-    colorMode = cm; setCmSeg(cm); cmHint.textContent = CM_HINT[cm]; forceRender = true; syncUrl();
+    colorMode = cm; setCmSeg(cm); cmHint.textContent = CM_HINT[cm]; forceRender = true; loop.key = ''; syncUrl();
   });
 
   NK.bindColorControls(color, { palette: 'paletteSel', gradBar: 'gradBar', seed: 'seedInput', reseed: 'btnReseed' }, () => {
-    forceRender = true; syncUrl();
+    forceRender = true; loop.key = ''; syncUrl();
   });
 
   document.getElementById('btnHome').addEventListener('click', goHome);
@@ -646,6 +820,7 @@
     const p = { seed: color.seed, pal: color.paletteKey, cm: colorMode, dir: gs < 0 ? 'ccw' : 'cw', auto: autoMode, leaf: leafPx };
     if (counterRotate) p.cr = 1;
     if (!followCurve) p.follow = 0;
+    if (!loopOn) p.loop = 0;
     NK.writeParams(p);
     // 세대 모드로 갈 때 색 설정 유지
     document.getElementById('linkFinite').href = `index.html?seed=${color.seed}&pal=${color.paletteKey}&dir=${gs < 0 ? 'ccw' : 'cw'}`;
@@ -671,7 +846,8 @@
   chkCounter.checked = counterRotate;
   leafIn.value = leafPx; leafLabel.textContent = leafPx + 'px';
   chkFollow.checked = followCurve;
-  setAutoSeg(autoMode); autoHint.textContent = AUTO_HINT[autoMode];
+  chkLoop.checked = loopOn;
+  setAutoSeg(autoMode); updateAutoHint();
   setDirSeg(gs < 0 ? 'ccw' : 'cw');
   setCmSeg(colorMode); cmHint.textContent = CM_HINT[colorMode];
   updateZoomSpeed();
