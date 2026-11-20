@@ -60,11 +60,26 @@
       </section>
 
       <section>
-        <label class="label">색 구역 크기 <span id="zoneLabel" class="value">400</span></label>
-        <input id="zoneSize" type="range" min="60" max="3000" step="10" value="400">
-        <div class="row buttons">
-          <button id="btnReseed">🎲 색 배치 바꾸기</button>
+        <label class="label">색 조합</label>
+        <select id="paletteSel">
+          <option value="neon">네온 무지개</option>
+          <option value="cyber">사이버펑크</option>
+          <option value="aurora">오로라</option>
+          <option value="sunset">선셋</option>
+          <option value="random">시드 랜덤 색</option>
+        </select>
+        <div id="gradBar" class="grad-bar"></div>
+
+        <label class="label" style="margin-top:14px">색 구역 크기 <span id="zoneLabel" class="value">1200</span></label>
+        <input id="zoneSize" type="range" min="200" max="8000" step="50" value="1200">
+
+        <label class="label" style="margin-top:14px">시드</label>
+        <div class="row seed-row">
+          <input id="seedInput" type="number" min="0" max="999999" step="1">
+          <button id="btnReseed" title="S">🎲 랜덤</button>
         </div>
+        <div class="hint">같은 시드 + 같은 설정이면 똑같은 색 배치가 나와요. 주소창 링크를 공유하면 그대로 열려요.</div>
+
         <label class="check"><input id="chkZones" type="checkbox"> 색 구역 희미하게 보기</label>
         <label class="check"><input id="chkDisc" type="checkbox" checked> 원판 보이기</label>
       </section>

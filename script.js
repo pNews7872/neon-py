@@ -17,19 +17,81 @@
   const DISC_R = 92;               // 원판 반지름 (화면 px)
   const DISC_INNER = 58;
 
-  const PALETTE = [
-    '#ff2bd6', // 마젠타
-    '#00f0ff', // 시안
-    '#39ff14', // 라임
-    '#ffe600', // 옐로
-    '#ff6a00', // 오렌지
-    '#8a5cff', // 바이올렛
-    '#ff3366', // 핑크레드
-  ];
-  const K = PALETTE.length;
-  const PALETTE_RGB = PALETTE.map(h => [
-    parseInt(h.slice(1, 3), 16), parseInt(h.slice(3, 5), 16), parseInt(h.slice(5, 7), 16),
-  ]);
+  // 색 팔레트: 몇 개의 기준색 사이를 색상환(HSL) 기준으로 부드럽게 보간해
+  // K단계의 그라데이션을 만든다. 선은 이 K단계 중 하나로 칠해짐.
+  const K = 96;
+  const PALETTES = {
+    neon:   { name: '네온 무지개', stops: ['#ff3366', '#ff6a00', '#ffe600', '#39ff14', '#00f0ff', '#8a5cff', '#ff2bd6'] },
+    cyber:  { name: '사이버펑크', stops: ['#ff2bd6', '#8a5cff', '#2d6bff', '#00f0ff'] },
+    aurora: { name: '오로라', stops: ['#39ff14', '#00ffa3', '#00f0ff', '#2d6bff', '#b44cff'] },
+    sunset: { name: '선셋', stops: ['#ffe600', '#ff6a00', '#ff3366', '#ff2bd6', '#8a5cff'] },
+    random: { name: '시드 랜덤', stops: null },
+  };
+  let paletteKey = 'neon';
+  let COLORS = [];      // K개의 css 색
+  let COLORS_RGB = [];  // K개의 [r,g,b]
+
+  function hexToRgb(h) { return [parseInt(h.slice(1, 3), 16), parseInt(h.slice(3, 5), 16), parseInt(h.slice(5, 7), 16)]; }
+  function rgbToHsl([r, g, b]) {
+    r /= 255; g /= 255; b /= 255;
+    const mx = Math.max(r, g, b), mn = Math.min(r, g, b), l = (mx + mn) / 2;
+    if (mx === mn) return [0, 0, l];
+    const d = mx - mn;
+    const s = l > 0.5 ? d / (2 - mx - mn) : d / (mx + mn);
+    let h = mx === r ? (g - b) / d + (g < b ? 6 : 0) : mx === g ? (b - r) / d + 2 : (r - g) / d + 4;
+    return [h * 60, s, l];
+  }
+  function hslToRgb(h, s, l) {
+    h = ((h % 360) + 360) % 360 / 360;
+    const f = (p, q, t) => {
+      if (t < 0) t += 1; if (t > 1) t -= 1;
+      if (t < 1 / 6) return p + (q - p) * 6 * t;
+      if (t < 1 / 2) return q;
+      if (t < 2 / 3) return p + (q - p) * (2 / 3 - t) * 6;
+      return p;
+    };
+    if (s === 0) return [l * 255, l * 255, l * 255].map(Math.round);
+    const q = l < 0.5 ? l * (1 + s) : l + s - l * s, p = 2 * l - q;
+    return [f(p, q, h + 1 / 3), f(p, q, h), f(p, q, h - 1 / 3)].map(v => Math.round(v * 255));
+  }
+  function mulberry32(a) {
+    return () => {
+      a |= 0; a = a + 0x6D2B79F5 | 0;
+      let t = Math.imul(a ^ a >>> 15, 1 | a);
+      t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+      return ((t ^ t >>> 14) >>> 0) / 4294967296;
+    };
+  }
+  // 시드로 네온 느낌의 랜덤 색 조합 만들기 (채도 100%, 밝기 55~62%)
+  function randomStops(sd) {
+    const rng = mulberry32(sd * 7919 + 17);
+    const cnt = 3 + Math.floor(rng() * 4);           // 기준색 3~6개
+    let h = rng() * 360;
+    const span = 140 + rng() * 220;                   // 색상환에서 쓰는 범위
+    const out = [];
+    for (let i = 0; i < cnt; i++) {
+      const hh = h + (span / cnt) * i + (rng() - 0.5) * 18;
+      const rgb = hslToRgb(hh, 1, 0.55 + rng() * 0.07);
+      out.push('#' + rgb.map(v => v.toString(16).padStart(2, '0')).join(''));
+    }
+    return out;
+  }
+  function buildColors() {
+    const hex = paletteKey === 'random' ? randomStops(seed) : PALETTES[paletteKey].stops;
+    const hsl = hex.map(h => rgbToHsl(hexToRgb(h)));
+    const m = hsl.length;
+    COLORS = []; COLORS_RGB = [];
+    for (let q = 0; q < K; q++) {
+      const pos = (q / K) * m;
+      const i = Math.floor(pos), f = pos - i;
+      const e = f * f * (3 - 2 * f);               // 기준색 근처에 살짝 머무르게
+      const A = hsl[i % m], B = hsl[(i + 1) % m];
+      const dh = ((B[0] - A[0]) % 360 + 540) % 360 - 180;
+      const rgb = hslToRgb(A[0] + dh * e, A[1] + (B[1] - A[1]) * e, A[2] + (B[2] - A[2]) * e);
+      COLORS_RGB.push(rgb);
+      COLORS.push(`rgb(${rgb[0]},${rgb[1]},${rgb[2]})`);
+    }
+  }
 
   // ---------------------------------------------------------
   // 원주율 계산 (Chudnovsky + binary splitting, Web Worker)
@@ -109,7 +171,7 @@
   // 색 구역: 도메인 워핑한 value noise 두 개의 각도로 유기적 얼룩 생성
   // ---------------------------------------------------------
   let seed = (Math.random() * 1e6) | 0;
-  let zoneScale = 400;
+  let zoneScale = 1200;
 
   function hash(ix, iy, s) {
     let h = Math.imul(ix, 374761393) + Math.imul(iy, 668265263) + Math.imul(s, 1442695041);
@@ -141,7 +203,7 @@
     const a = fbm(u, v, seed);
     const b = fbm(u + 11.7, v - 4.4, seed + 500);
     const t = Math.atan2(b, a) / (Math.PI * 2) + 0.5;
-    return Math.min(K - 1, Math.floor(t * K));
+    return Math.floor(t * K) % K;
   }
 
   // ---------------------------------------------------------
@@ -161,7 +223,7 @@
   function resetWalk() {
     n = 0; heading = 0; lastDir = 0; drawnUpTo = 0;
     pts[0] = 0; pts[1] = 0;
-    paths = PALETTE.map(() => new Path2D());
+    paths = Array.from({ length: K }, () => new Path2D());
     bounds = { minX: 0, minY: 0, maxX: 0, maxY: 0 };
   }
 
@@ -263,7 +325,7 @@
   }
 
   function strokeStyleFor(ctx, k, glow) {
-    ctx.strokeStyle = PALETTE[k];
+    ctx.strokeStyle = COLORS[k];
     if (glow) { ctx.globalAlpha = 0.16; ctx.lineWidth = 6 / cam.s; }
     else { ctx.globalAlpha = 0.95; ctx.lineWidth = 1.3 / cam.s; }
   }
@@ -290,7 +352,7 @@
 
   function incrementalDraw() {
     if (drawnUpTo >= n) return;
-    const tmp = PALETTE.map(() => null);
+    const tmp = new Array(K).fill(null);
     for (let i = drawnUpTo; i < n; i++) {
       const c = cols[i];
       if (!tmp[c]) tmp[c] = new Path2D();
@@ -346,7 +408,7 @@
     for (let j = 0; j < ch; j++) {
       for (let i = 0; i < cw; i++) {
         const [wx, wy] = screenToWorld(i * cell, j * cell);
-        const rgb = PALETTE_RGB[zoneAt(wx, wy)];
+        const rgb = COLORS_RGB[zoneAt(wx, wy)];
         const p = (j * cw + i) * 4;
         d[p] = rgb[0]; d[p + 1] = rgb[1]; d[p + 2] = rgb[2]; d[p + 3] = 34;
       }
@@ -447,7 +509,7 @@
       const [ax, ay] = worldToScreen(anim.x0, anim.y0);
       const [bx, by] = worldToScreen(ps.x, ps.y);
       oCtx.lineCap = 'round';
-      oCtx.strokeStyle = PALETTE[anim.color];
+      oCtx.strokeStyle = COLORS[anim.color];
       oCtx.globalAlpha = 0.25; oCtx.lineWidth = 7;
       oCtx.beginPath(); oCtx.moveTo(ax, ay); oCtx.lineTo(bx, by); oCtx.stroke();
       oCtx.globalAlpha = 1; oCtx.lineWidth = 2;
@@ -457,7 +519,7 @@
     if (!showDisc) return;
     const [cx, cy] = worldToScreen(ps.x, ps.y);
     if (cx < -DISC_R * 2 || cy < -DISC_R * 2 || cx > W + DISC_R * 2 || cy > H + DISC_R * 2) return;
-    const col = PALETTE[ps.color];
+    const col = COLORS[ps.color];
 
     oCtx.save();
     oCtx.translate(cx, cy);
@@ -673,7 +735,7 @@
       elPast.textContent = past;
       elNow.textContent = PI[idx];
       const c = anim.active ? anim.color : cols[idx];
-      elNow.style.color = PALETTE[c];
+      elNow.style.color = COLORS[c];
     } else {
       elPast.textContent = '';
       elNow.textContent = '';
@@ -750,6 +812,7 @@
         ? '숫자 n → 항상 n×36° 방향으로 긋기 (0 = 위쪽, 시계방향)'
         : '숫자 n → 지금 가던 방향에서 n×36°만큼 꺾어서 긋기 (0 = 직진)';
       rebuild(n);
+      syncUrl();
       if (camMode === 'fit') fitTarget(true);
       if (camMode === 'follow') setCamMode('follow');
       toast(`${mode === 'absolute' ? '절대 방향' : '상대 회전'}으로 지금까지 그린 ${n.toLocaleString('ko-KR')}줄을 다시 그렸어요`);
@@ -760,19 +823,56 @@
     b.addEventListener('click', () => setCamMode(b.dataset.cam));
   });
 
+  const seedInput = document.getElementById('seedInput');
+  const paletteSel = document.getElementById('paletteSel');
+  const gradBar = document.getElementById('gradBar');
+
+  function updateGradBar() {
+    const stops = [];
+    for (let q = 0; q <= K; q += 8) stops.push(COLORS[q % K]);
+    gradBar.style.background = `linear-gradient(90deg, ${stops.join(',')})`;
+  }
+  // 현재 시드·설정을 주소창에 반영 (링크 공유용)
+  function syncUrl() {
+    const p = new URLSearchParams();
+    p.set('seed', seed);
+    p.set('zone', zoneScale);
+    p.set('pal', paletteKey);
+    p.set('mode', mode);
+    try { history.replaceState(null, '', '?' + p.toString()); } catch (e) { /* file:// 등 */ }
+  }
+  function applyColors() {
+    buildColors();
+    updateGradBar();
+    recolor();
+    syncUrl();
+  }
+
   let zoneTimer = 0;
   zoneInput.addEventListener('input', () => {
     zoneLabel.textContent = zoneInput.value;
     clearTimeout(zoneTimer);
-    zoneTimer = setTimeout(() => { zoneScale = parseFloat(zoneInput.value); recolor(); }, 120);
+    zoneTimer = setTimeout(() => { zoneScale = parseFloat(zoneInput.value); recolor(); syncUrl(); }, 120);
   });
+  function setSeed(v) {
+    seed = Math.max(0, Math.min(999999, v | 0));
+    seedInput.value = seed;
+    applyColors();
+  }
   document.getElementById('btnReseed').addEventListener('click', () => {
-    seed = (Math.random() * 1e6) | 0;
-    recolor();
-    toast('색 구역을 새로 배치했어요');
+    setSeed((Math.random() * 1e6) | 0);
+    toast(`시드 ${seed} — 색 구역을 새로 배치했어요`);
+  });
+  seedInput.addEventListener('change', () => {
+    const v = parseInt(seedInput.value, 10);
+    if (Number.isFinite(v)) setSeed(v); else seedInput.value = seed;
+  });
+  paletteSel.addEventListener('change', () => {
+    paletteKey = paletteSel.value;
+    applyColors();
   });
   function recolor() {
-    paths = PALETTE.map(() => new Path2D());
+    paths = Array.from({ length: K }, () => new Path2D());
     for (let i = 0; i < n; i++) {
       const x0 = pts[i * 2], y0 = pts[i * 2 + 1], x1 = pts[i * 2 + 2], y1 = pts[i * 2 + 3];
       const c = zoneAt((x0 + x1) / 2, (y0 + y1) / 2);
@@ -865,12 +965,13 @@
   overlay.addEventListener('pointercancel', endPointer);
 
   window.addEventListener('keydown', e => {
-    if (e.target.tagName === 'INPUT' && e.target.type !== 'range' && e.target.type !== 'checkbox') return;
+    if ((e.target.tagName === 'INPUT' && e.target.type !== 'range' && e.target.type !== 'checkbox') || e.target.tagName === 'SELECT') return;
     switch (e.key) {
       case ' ': e.preventDefault(); setPlaying(!playing); break;
       case 'ArrowRight': e.preventDefault(); stepOnce(); break;
       case 'r': case 'R': restart(); break;
       case 'f': case 'F': setCamMode('follow'); break;
+      case 's': case 'S': document.getElementById('btnReseed').click(); break;
       case 'a': case 'A': setCamMode('fit'); break;
       case '+': case '=': zoomAt(W / 2, H / 2, 1.25); break;
       case '-': case '_': zoomAt(W / 2, H / 2, 0.8); break;
@@ -882,9 +983,29 @@
   // ---------------------------------------------------------
   // 시작
   // ---------------------------------------------------------
+  (() => {
+    const p = new URLSearchParams(location.search);
+    const sd = parseInt(p.get('seed'), 10);
+    if (Number.isFinite(sd)) seed = Math.max(0, Math.min(999999, sd));
+    const z = parseFloat(p.get('zone'));
+    if (Number.isFinite(z)) zoneScale = Math.max(200, Math.min(8000, z));
+    if (PALETTES[p.get('pal')]) paletteKey = p.get('pal');
+    if (p.get('mode') === 'relative') {
+      mode = 'relative';
+      document.querySelectorAll('#modeSeg button').forEach(x => x.classList.toggle('on', x.dataset.mode === 'relative'));
+      document.getElementById('modeHint').textContent = '숫자 n → 지금 가던 방향에서 n×36°만큼 꺾어서 긋기 (0 = 직진)';
+    }
+    seedInput.value = seed;
+    zoneInput.value = zoneScale;
+    zoneLabel.textContent = zoneScale;
+    paletteSel.value = paletteKey;
+  })();
+  buildColors();
+  updateGradBar();
   resetWalk();
   resize();
   updateSpeed();
+  syncUrl();
   startPi();
   requestAnimationFrame(frame);
 })();
