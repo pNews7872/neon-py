@@ -326,6 +326,25 @@ void main() {
             c.n++; total++;
           }
         },
+        // 서로 떨어진 선분 목록 [x0,y0,x1,y1,...] 덧붙이기 (자라는 가지처럼 매 프레임 바뀌는 것용)
+        appendSegs(arr, cols, count) {
+          for (let i = 0; i < count; i++) {
+            let c = chunks[chunks.length - 1];
+            if (!c || c.n >= CHUNK) c = newChunk(arr[i * 4], arr[i * 4 + 1]);
+            if (c.n === 0) { c.ox = arr[i * 4]; c.oy = arr[i * 4 + 1]; }
+            const o = c.n * 4;
+            c.data[o] = arr[i * 4] - c.ox; c.data[o + 1] = arr[i * 4 + 1] - c.oy;
+            c.data[o + 2] = arr[i * 4 + 2] - c.ox; c.data[o + 3] = arr[i * 4 + 3] - c.oy;
+            c.cols[c.n] = cols[i];
+            c.n++; total++;
+          }
+        },
+        // 버퍼는 남겨두고 내용만 비움 (매 프레임 다시 채우는 레이어용)
+        clear() {
+          while (chunks.length > 1) { const c = chunks.pop(); gl.deleteBuffer(c.buf); gl.deleteBuffer(c.colBuf); gl.deleteVertexArray(c.vao); }
+          if (chunks[0]) { chunks[0].n = 0; chunks[0].dirtyFrom = 0; chunks[0].colDirty = false; }
+          total = 0;
+        },
         // 색만 다시 (위치는 그대로)
         recolorFrom(cols) {
           let i = 0;
