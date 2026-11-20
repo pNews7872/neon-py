@@ -1,0 +1,20 @@
+/* π WALK 전용 스타일 (공통 스타일은 ../assets/common.css) */
+
+#digits {
+  margin-top: 8px;
+  font-family: "JetBrains Mono", "Consolas", "D2Coding", monospace;
+  font-size: 18px;
+  letter-spacing: 0.08em;
+  white-space: nowrap;
+  overflow: hidden;
+  color: rgba(255, 255, 255, 0.35);
+}
+#digitNow {
+  display: inline-block;
+  min-width: 1.2em;
+  text-align: center;
+  font-weight: 700;
+  font-size: 24px;
+  color: #fff;
+  text-shadow: 0 0 8px currentColor, 0 0 18px currentColor;
+}

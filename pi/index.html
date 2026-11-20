@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+  <title>π WALK — 원주율 네온 드로잉</title>
+  <link rel="stylesheet" href="../assets/common.css">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="stage">
+    <canvas id="trail"></canvas>
+    <canvas id="overlay"></canvas>
+  </div>
+
+  <header id="hud">
+    <a class="back" href="../index.html">← 메인으로</a>
+    <div class="title">π<span>WALK</span></div>
+    <div id="digits"><span id="digitsPast"></span><span id="digitNow"></span></div>
+    <div class="stats">
+      <span id="statCount">0</span>번째 자리 ·
+      <span id="statZoom">100%</span> ·
+      <span id="statStatus">원주율 계산 중…</span>
+    </div>
+  </header>
+
+  <aside id="panel">
+    <button id="panelToggle" class="panel-toggle" title="패널 접기/펼치기">⟨</button>
+    <div class="panel-body">
+      <section>
+        <div class="row buttons">
+          <button id="btnPlay" class="primary" title="Space">⏸ 일시정지</button>
+          <button id="btnStep" title="→">한 칸 ⏭</button>
+          <button id="btnReset" title="R">↺ 처음부터</button>
+        </div>
+      </section>
+
+      <section>
+        <label class="label">속도 <span id="speedLabel" class="value">2 /초</span></label>
+        <input id="speed" type="range" min="0" max="100" step="0.5" value="13">
+        <div class="hint">느리면 원판이 돌고 선을 긋는 모습이 보이고, 빠르면 한 번에 여러 줄을 긋습니다.</div>
+      </section>
+
+      <section>
+        <label class="label">각도 방식</label>
+        <div class="seg" id="modeSeg">
+          <button data-mode="absolute" class="on">절대 방향</button>
+          <button data-mode="relative">상대 회전</button>
+        </div>
+        <div class="hint" id="modeHint">숫자 n → 항상 n×36° 방향으로 긋기 (0 = 위쪽, 시계방향)</div>
+      </section>
+
+      <section>
+        <label class="label">카메라</label>
+        <div class="seg" id="camSeg">
+          <button data-cam="follow" class="on" title="F">따라가기</button>
+          <button data-cam="fit" title="A">전체 맞춤</button>
+          <button data-cam="free">자유</button>
+        </div>
+        <div class="hint">드래그로 이동 · 휠/핀치로 확대·축소 (조작하면 자유 모드로 바뀜)</div>
+      </section>
+
+      <section>
+        <label class="label">색 조합</label>
+        <select id="paletteSel">
+          <option value="neon">네온 무지개</option>
+          <option value="cyber">사이버펑크</option>
+          <option value="aurora">오로라</option>
+          <option value="sunset">선셋</option>
+          <option value="random">시드 랜덤 색</option>
+        </select>
+        <div id="gradBar" class="grad-bar"></div>
+
+        <label class="label" style="margin-top:14px">색 구역 크기 <span id="zoneLabel" class="value">1200</span></label>
+        <input id="zoneSize" type="range" min="200" max="8000" step="50" value="1200">
+
+        <label class="label" style="margin-top:14px">시드</label>
+        <div class="row seed-row">
+          <input id="seedInput" type="number" min="0" max="999999" step="1">
+          <button id="btnReseed" title="S">🎲 랜덤</button>
+        </div>
+        <div class="hint">같은 시드 + 같은 설정이면 똑같은 색 배치가 나와요. 주소창 링크를 공유하면 그대로 열려요.</div>
+
+        <label class="check"><input id="chkZones" type="checkbox"> 색 구역 희미하게 보기</label>
+        <label class="check"><input id="chkDisc" type="checkbox" checked> 원판 보이기</label>
+      </section>
+
+      <section class="legend" id="legend"></section>
+    </div>
+  </aside>
+
+  <div id="toast"></div>
+
+  <script src="../assets/neon.js"></script>
+  <script src="script.js"></script>
+</body>
+</html>

@@ -1,0 +1,24 @@
+/* DRAGON CURVE 전용 스타일 (공통 스타일은 ../assets/common.css) */
+
+.title { text-shadow: 0 0 10px #ff2bd6, 0 0 26px #ff2bd6; }
+.title span { color: var(--accent); text-shadow: 0 0 8px var(--accent); }
+
+.gen-line {
+  margin-top: 8px;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-family: "JetBrains Mono", "Consolas", "D2Coding", monospace;
+}
+.gen-label { font-size: 13px; color: var(--dim); font-family: inherit; }
+.gen-num {
+  font-size: 34px;
+  font-weight: 800;
+  color: #fff;
+  min-width: 1.4em;
+  text-shadow: 0 0 8px currentColor, 0 0 20px currentColor;
+  transition: color 0.3s;
+}
+.gen-sep, .gen-max { font-size: 18px; color: rgba(255, 255, 255, 0.35); }
+
+#zoneBlock.disabled { opacity: 0.35; pointer-events: none; }

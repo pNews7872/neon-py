@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+  <title>DRAGON CURVE — 드래곤 커브 네온 드로잉</title>
+  <link rel="stylesheet" href="../assets/common.css">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="stage">
+    <canvas id="trail"></canvas>
+    <canvas id="overlay"></canvas>
+  </div>
+
+  <header id="hud">
+    <a class="back" href="../index.html">← 메인으로</a>
+    <div class="title">DRAGON<span>CURVE</span></div>
+    <div class="gen-line">
+      <span class="gen-label">세대</span>
+      <span id="genNow" class="gen-num">0</span>
+      <span class="gen-sep">/</span>
+      <span id="genMax" class="gen-max">16</span>
+    </div>
+    <div class="stats">
+      선 <span id="statSegs">1</span>개 ·
+      <span id="statZoom">100%</span> ·
+      <span id="statStatus">준비</span>
+    </div>
+  </header>
+
+  <aside id="panel">
+    <button id="panelToggle" class="panel-toggle" title="패널 접기/펼치기">⟨</button>
+    <div class="panel-body">
+      <section>
+        <div class="row buttons">
+          <button id="btnPlay" class="primary" title="Space">⏸ 일시정지</button>
+          <button id="btnStep" title="→">한 세대 ⏭</button>
+          <button id="btnReset" title="R">↺ 처음부터</button>
+        </div>
+      </section>
+
+      <section>
+        <label class="label">회전 시간 <span id="durLabel" class="value">1.5초</span></label>
+        <input id="duration" type="range" min="0" max="100" step="0.5" value="34">
+        <div class="hint">지금까지 그린 선 전체를 끝점 기준으로 90° 돌려서 복사하는 데 걸리는 시간이에요.</div>
+      </section>
+
+      <section>
+        <label class="label">최대 세대 <span id="maxLabel" class="value">16</span></label>
+        <input id="maxGen" type="range" min="1" max="20" step="1" value="16">
+        <div class="hint">세대마다 선이 2배로 늘어나요. 20세대 = 선 1,048,576개.</div>
+      </section>
+
+      <section>
+        <label class="label">회전 방향</label>
+        <div class="seg" id="dirSeg">
+          <button data-dir="cw" class="on">시계 방향</button>
+          <button data-dir="ccw">반시계 방향</button>
+        </div>
+      </section>
+
+      <section>
+        <label class="label">색칠 방식</label>
+        <div class="seg" id="colorModeSeg">
+          <button data-cm="gen" class="on">세대별</button>
+          <button data-cm="order">선 순서</button>
+          <button data-cm="zone">색 구역</button>
+        </div>
+        <div class="hint" id="colorModeHint">세대마다 새로 복사된 부분이 다음 색이 돼요.</div>
+      </section>
+
+      <section>
+        <label class="label">카메라</label>
+        <div class="seg" id="camSeg">
+          <button data-cam="follow" title="F">끝점 따라가기</button>
+          <button data-cam="fit" class="on" title="A">전체 맞춤</button>
+          <button data-cam="free">자유</button>
+        </div>
+        <div class="hint">드래그로 이동 · 휠/핀치로 확대·축소 (조작하면 자유 모드로 바뀜)</div>
+      </section>
+
+      <section>
+        <label class="label">색 조합</label>
+        <select id="paletteSel">
+          <option value="neon">네온 무지개</option>
+          <option value="cyber">사이버펑크</option>
+          <option value="aurora">오로라</option>
+          <option value="sunset">선셋</option>
+          <option value="random">시드 랜덤 색</option>
+        </select>
+        <div id="gradBar" class="grad-bar"></div>
+
+        <div id="zoneBlock">
+          <label class="label" style="margin-top:14px">색 구역 크기 <span id="zoneLabel" class="value">1200</span></label>
+          <input id="zoneSize" type="range" min="200" max="8000" step="50" value="1200">
+        </div>
+
+        <label class="label" style="margin-top:14px">시드</label>
+        <div class="row seed-row">
+          <input id="seedInput" type="number" min="0" max="999999" step="1">
+          <button id="btnReseed" title="S">🎲 랜덤</button>
+        </div>
+        <div class="hint">같은 시드 + 같은 설정이면 똑같은 색이 나와요. 주소창 링크를 공유하면 그대로 열려요.</div>
+
+        <label class="check"><input id="chkPivot" type="checkbox" checked> 회전축 표시</label>
+      </section>
+    </div>
+  </aside>
+
+  <div id="toast"></div>
+
+  <script src="../assets/neon.js"></script>
+  <script src="script.js"></script>
+</body>
+</html>
