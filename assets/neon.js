@@ -392,9 +392,23 @@
               this.sendConfig(); this.resetRenderer();
               toast('GPU 그리기가 중단돼서 기본 방식으로 바꿨어요');
             });
-          } else cv.remove();
-        } catch (err) { console.warn('WebGL2 사용 불가', err); }
+          } else { cv.remove(); this.gpuError = 'WebGL2를 지원하지 않는 브라우저'; }
+        } catch (err) {
+          console.warn('WebGL2 사용 불가', err);
+          this.gpuError = String(err && err.message || err).slice(0, 80);
+          const c = document.getElementById('gl'); if (c) c.remove();
+        }
       }
+      // 지금 어떤 방식으로 그리는지 HUD에 표시 (문제 확인용)
+      const stats = document.querySelector('#hud .stats');
+      if (stats) {
+        const tag = document.createElement('span');
+        tag.className = 'render-tag';
+        tag.textContent = this.gpu ? ' · GPU' : ' · 캔버스';
+        tag.title = this.gpu ? 'GPU(WebGL2)로 그리는 중' : ('기본 캔버스 방식으로 그리는 중' + (this.gpuError ? ' — ' + this.gpuError : ''));
+        stats.appendChild(tag);
+      }
+      if (!this.gpu && this.gpuError && !noGl) setTimeout(() => toast('GPU를 쓰지 못해서 기본 방식으로 그려요: ' + this.gpuError), 800);
 
       this._bindInput();
       styleListeners.push(() => { this.forceRender = true; });

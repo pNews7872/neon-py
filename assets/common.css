@@ -270,3 +270,5 @@ input[type="number"] { font-family: "Consolas", monospace; user-select: text; }
   .panel-toggle { left: auto; right: 0; top: -38px; }
   #panel.collapsed .panel-toggle { left: auto; top: -44px; }
 }
+
+.render-tag { color: var(--dim); }
