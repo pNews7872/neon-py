@@ -12,7 +12,11 @@
   const DEG_PER_DIGIT = 36;        // 360 / 10
   const ANIM_MAX_SPEED = 30;       // 이 속도(줄/초) 이하에서는 원판 애니메이션 표시
   const MAX_PER_FRAME = 60000;     // 한 프레임에 그을 수 있는 최대 줄 수
-  const HEAVY = 80000;             // 이보다 줄이 많으면 화면 이동 중엔 미리보기로 처리
+  const GLOW_PX = 6;               // 선 번짐(글로우) 두께 (화면 px)
+  const CORE_PX = 1.3;             // 선 심지 두께 (화면 px)
+  const BUF_MARGIN = 3;            // 미리 그려둘 범위: 화면 크기의 몇 배 (가로·세로 각각)
+  const BUF_MAX_PIXELS = 48e6;     // 버퍼 최대 픽셀 수 (메모리 보호)
+  const RERENDER_ZOOM = 1.25;      // 버퍼 대비 이만큼 확대/축소되면 선명하게 다시 그림
   const PI_STAGES = [2000, 20000, 200000, 1000000];
   const DISC_R = 92;               // 원판 반지름 (화면 px)
   const DISC_INNER = 58;
@@ -168,43 +172,146 @@
   }
 
   // ---------------------------------------------------------
-  // 색 구역: 도메인 워핑한 value noise 두 개의 각도로 유기적 얼룩 생성
+  // 색 구역: 도메인 워핑한 value noise 두 개의 각도로 유기적 그라데이션 생성
+  // (워커에서도 그대로 쓰도록 외부 변수를 참조하지 않는 함수로 작성)
   // ---------------------------------------------------------
+  function zoneFactory(seed, zoneScale, K) {
+    function hash(ix, iy, s) {
+      let h = Math.imul(ix, 374761393) + Math.imul(iy, 668265263) + Math.imul(s, 1442695041);
+      h = Math.imul(h ^ (h >>> 13), 1274126177);
+      h ^= h >>> 16;
+      return (h >>> 0) / 4294967296;
+    }
+    function vnoise(x, y, s) {
+      const ix = Math.floor(x), iy = Math.floor(y);
+      const fx = x - ix, fy = y - iy;
+      const ux = fx * fx * (3 - 2 * fx), uy = fy * fy * (3 - 2 * fy);
+      const a = hash(ix, iy, s), b = hash(ix + 1, iy, s);
+      const c = hash(ix, iy + 1, s), d = hash(ix + 1, iy + 1, s);
+      return (a + (b - a) * ux + (c - a + (a - b + d - c) * ux) * uy) * 2 - 1;
+    }
+    function fbm(x, y, s) {
+      let sum = 0, amp = 0.5, f = 1;
+      for (let i = 0; i < 4; i++) {
+        sum += amp * vnoise(x * f, y * f, s + i * 131);
+        f *= 2.03; amp *= 0.5;
+      }
+      return sum;
+    }
+    return function zoneAt(x, y) {
+      let u = x / zoneScale, v = y / zoneScale;
+      const wx = fbm(u + 5.2, v + 1.3, seed + 1000);
+      const wy = fbm(u - 3.1, v + 7.7, seed + 2000);
+      u += wx * 1.4; v += wy * 1.4;
+      const a = fbm(u, v, seed);
+      const b = fbm(u + 11.7, v - 4.4, seed + 500);
+      const t = Math.atan2(b, a) / (Math.PI * 2) + 0.5;
+      return Math.floor(t * K) % K;
+    };
+  }
+
   let seed = (Math.random() * 1e6) | 0;
   let zoneScale = 1200;
+  let zoneAt = zoneFactory(seed, zoneScale, K);
+  function refreshZoneFn() { zoneAt = zoneFactory(seed, zoneScale, K); }
 
-  function hash(ix, iy, s) {
-    let h = Math.imul(ix, 374761393) + Math.imul(iy, 668265263) + Math.imul(s, 1442695041);
-    h = Math.imul(h ^ (h >>> 13), 1274126177);
-    h ^= h >>> 16;
-    return (h >>> 0) / 4294967296;
-  }
-  function vnoise(x, y, s) {
-    const ix = Math.floor(x), iy = Math.floor(y);
-    const fx = x - ix, fy = y - iy;
-    const ux = fx * fx * (3 - 2 * fx), uy = fy * fy * (3 - 2 * fy);
-    const a = hash(ix, iy, s), b = hash(ix + 1, iy, s);
-    const c = hash(ix, iy + 1, s), d = hash(ix + 1, iy + 1, s);
-    return (a + (b - a) * ux + (c - a + (a - b + d - c) * ux) * uy) * 2 - 1;
-  }
-  function fbm(x, y, s) {
-    let sum = 0, amp = 0.5, f = 1;
-    for (let i = 0; i < 4; i++) {
-      sum += amp * vnoise(x * f, y * f, s + i * 131);
-      f *= 2.03; amp *= 0.5;
+  // ---------------------------------------------------------
+  // 렌더러 (Web Worker + OffscreenCanvas)
+  // 화면보다 훨씬 넓은 영역을 백그라운드에서 미리 그려 이미지로 돌려준다.
+  // 화면 이동·확대는 이 이미지를 옮기고 늘리기만 하므로 다시 그리지 않음.
+  // ---------------------------------------------------------
+  function rendererMain(zoneFactory, port, makeCanvas) {
+    let K = 96, colors = [], colorsRgb = [], zoneAt = null, showZones = false;
+    let paths = [], count = 0;
+    let canvas = null, ctx = null, small = null, smallCtx = null;
+    const resetPaths = () => { paths = Array.from({ length: K }, () => new Path2D()); count = 0; };
+    resetPaths();
+
+    function drawZones(m) {
+      const cell = 12;
+      const cw = Math.ceil(m.w / cell) + 1, ch = Math.ceil(m.h / cell) + 1;
+      if (!small || small.width !== cw || small.height !== ch) { small = makeCanvas(cw, ch); smallCtx = small.getContext('2d'); }
+      const img = smallCtx.createImageData(cw, ch);
+      const d = img.data;
+      for (let j = 0; j < ch; j++) {
+        const wy = (j * cell - m.h / 2) / m.s + m.cy;
+        for (let i = 0; i < cw; i++) {
+          const wx = (i * cell - m.w / 2) / m.s + m.cx;
+          const rgb = colorsRgb[zoneAt(wx, wy)];
+          const p = (j * cw + i) * 4;
+          d[p] = rgb[0]; d[p + 1] = rgb[1]; d[p + 2] = rgb[2]; d[p + 3] = 34;
+        }
+      }
+      smallCtx.putImageData(img, 0, 0);
+      ctx.imageSmoothingEnabled = true;
+      ctx.drawImage(small, 0, 0, cw, ch, 0, 0, cw * cell, ch * cell);
     }
-    return sum;
+
+    function render(m) {
+      if (!canvas || canvas.width !== m.w || canvas.height !== m.h) {
+        canvas = makeCanvas(m.w, m.h);
+        ctx = canvas.getContext('2d');
+      }
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.clearRect(0, 0, m.w, m.h);
+      if (showZones && zoneAt) drawZones(m);
+      ctx.setTransform(m.s, 0, 0, m.s, m.w / 2 - m.cx * m.s, m.h / 2 - m.cy * m.s);
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      for (let pass = 0; pass < 2; pass++) {
+        ctx.globalAlpha = pass === 0 ? 0.16 : 0.95;
+        ctx.lineWidth = (pass === 0 ? m.glow : m.core) / m.s;
+        for (let k = 0; k < K; k++) {
+          ctx.strokeStyle = colors[k];
+          ctx.stroke(paths[k]);
+        }
+      }
+      ctx.globalAlpha = 1;
+      const bitmap = canvas.transferToImageBitmap ? canvas.transferToImageBitmap() : canvas;
+      const out = { type: 'rendered', id: m.id, gen: m.gen, cx: m.cx, cy: m.cy, s: m.s, w: m.w, h: m.h, upTo: count, bitmap };
+      if (canvas.transferToImageBitmap) port.postMessage(out, [bitmap]);
+      else port.postMessage(out);
+    }
+
+    port.onmessage = (e) => {
+      const m = e.data;
+      if (m.type === 'config') {
+        const kChanged = m.K !== K;
+        K = m.K; colors = m.colors; colorsRgb = m.colorsRgb; showZones = m.showZones;
+        zoneAt = zoneFactory(m.seed, m.zoneScale, m.K);
+        if (kChanged) resetPaths();
+      } else if (m.type === 'reset') {
+        resetPaths();
+      } else if (m.type === 'append') {
+        const p = m.pts, c = m.cols;
+        for (let i = 0; i < c.length; i++) {
+          const path = paths[c[i]];
+          path.moveTo(p[i * 2], p[i * 2 + 1]);
+          path.lineTo(p[i * 2 + 2], p[i * 2 + 3]);
+        }
+        count = m.start + c.length;
+      } else if (m.type === 'render') {
+        render(m);
+      }
+    };
   }
-  function zoneAt(x, y) {
-    let u = x / zoneScale, v = y / zoneScale;
-    const wx = fbm(u + 5.2, v + 1.3, seed + 1000);
-    const wy = fbm(u - 3.1, v + 7.7, seed + 2000);
-    u += wx * 1.4; v += wy * 1.4;
-    const a = fbm(u, v, seed);
-    const b = fbm(u + 11.7, v - 4.4, seed + 500);
-    const t = Math.atan2(b, a) / (Math.PI * 2) + 0.5;
-    return Math.floor(t * K) % K;
-  }
+
+  // 워커 생성 (안 되면 메인 스레드에서 같은 코드로 대체)
+  const renderer = (() => {
+    const handlers = { onResult: null };
+    try {
+      if (typeof OffscreenCanvas === 'undefined' || !OffscreenCanvas.prototype.transferToImageBitmap) throw new Error('no offscreen');
+      const src = zoneFactory.toString() + '\n(' + rendererMain.toString() +
+        ')(zoneFactory, self, (w, h) => new OffscreenCanvas(w, h));';
+      const w = new Worker(URL.createObjectURL(new Blob([src], { type: 'text/javascript' })));
+      w.onmessage = (e) => handlers.onResult && handlers.onResult(e.data);
+      return { post: (m, t) => w.postMessage(m, t || []), handlers, threaded: true };
+    } catch (err) {
+      const port = { onmessage: null, postMessage: (m) => setTimeout(() => handlers.onResult && handlers.onResult(m), 0) };
+      rendererMain(zoneFactory, port, (w, h) => { const c = document.createElement('canvas'); c.width = w; c.height = h; return c; });
+      return { post: (m) => port.onmessage({ data: m }), handlers, threaded: false };
+    }
+  })();
 
   // ---------------------------------------------------------
   // 걷기(선) 데이터
@@ -216,14 +323,11 @@
   let n = 0;                               // 그어진 선 개수
   let heading = 0;                         // 상대 회전 모드의 현재 방향(도)
   let lastDir = 0;                         // 마지막으로 그은 방향(도)
-  let paths = [];                          // 색별 Path2D
-  let drawnUpTo = 0;                       // trail 캔버스에 반영된 선 개수
   let bounds = { minX: 0, minY: 0, maxX: 0, maxY: 0 };
 
   function resetWalk() {
-    n = 0; heading = 0; lastDir = 0; drawnUpTo = 0;
+    n = 0; heading = 0; lastDir = 0;
     pts[0] = 0; pts[1] = 0;
-    paths = Array.from({ length: K }, () => new Path2D());
     bounds = { minX: 0, minY: 0, maxX: 0, maxY: 0 };
   }
 
@@ -255,8 +359,6 @@
     const c = zoneAt((x0 + x1) / 2, (y0 + y1) / 2);
     pts[n * 2 + 2] = x1; pts[n * 2 + 3] = y1;
     cols[n] = c;
-    paths[c].moveTo(x0, y0);
-    paths[c].lineTo(x1, y1);
     heading = nd.heading;
     lastDir = nd.dir;
     if (x1 < bounds.minX) bounds.minX = x1;
@@ -272,45 +374,47 @@
     resetWalk();
     while (n < count && commit()) { /* */ }
     anim.active = false;
-    requestFull();
+    resetRenderer();
   }
 
   // ---------------------------------------------------------
   // 캔버스 & 카메라
   // ---------------------------------------------------------
-  const bgCanvas = document.getElementById('bg');
   const trailCanvas = document.getElementById('trail');
   const overlay = document.getElementById('overlay');
-  const bgCtx = bgCanvas.getContext('2d');
   const tCtx = trailCanvas.getContext('2d');
   const oCtx = overlay.getContext('2d');
-  const cache = document.createElement('canvas');
-  const cacheCtx = cache.getContext('2d');
-  const zoneSmall = document.createElement('canvas');
-  const zoneSmallCtx = zoneSmall.getContext('2d');
 
   let W = 0, H = 0, DPR = 1;
   const cam = { x: 0, y: 0, s: 2 };
   const target = { x: 0, y: 0, s: 2 };
-  let renderCam = { x: 0, y: 0, s: 2 };
   let camMode = 'follow';
-  let needFull = true;
-  let previewing = false;
-  let lastViewChange = 0;
   let showZones = false;
   let showDisc = true;
+  let dirty = true;                 // 화면(trail 캔버스)을 다시 합성해야 하는지
+
+  // 미리 그려둔 큰 버퍼
+  const buf = document.createElement('canvas');
+  const bufCtx = buf.getContext('2d');
+  let bufCam = null;                // { x, y, s(기기 px 배율), w, h }
+  let bufUpTo = 0;                  // 버퍼에 반영된 선 개수
+  let bufStale = false;             // 리셋 후 새 버퍼가 오기 전 (임시로 이전 그림 표시)
+  let gen = 0;                      // 리셋 세대 번호
+  let sentUpTo = 0;                 // 렌더러에 보낸 선 개수
+  let inflight = false;
+  let forceRender = true;
+  let renderId = 0;
 
   function resize() {
     DPR = Math.min(window.devicePixelRatio || 1, 2);
     W = window.innerWidth; H = window.innerHeight;
-    for (const c of [bgCanvas, trailCanvas, overlay, cache]) {
+    for (const c of [trailCanvas, overlay]) {
       c.width = Math.round(W * DPR);
       c.height = Math.round(H * DPR);
     }
-    requestFull();
+    forceRender = true;
+    dirty = true;
   }
-
-  function requestFull() { needFull = true; }
 
   function worldToScreen(x, y) {
     return [(x - cam.x) * cam.s + W / 2, (y - cam.y) * cam.s + H / 2];
@@ -319,103 +423,121 @@
     return [(sx - W / 2) / cam.s + cam.x, (sy - H / 2) / cam.s + cam.y];
   }
 
-  function setWorldTransform(ctx) {
-    const s = cam.s * DPR;
-    ctx.setTransform(s, 0, 0, s, DPR * (W / 2 - cam.x * cam.s), DPR * (H / 2 - cam.y * cam.s));
+  function viewChanged() { dirty = true; }
+
+  function sendConfig() {
+    renderer.post({ type: 'config', K, colors: COLORS, colorsRgb: COLORS_RGB, seed, zoneScale, showZones });
+  }
+  // 선 데이터가 통째로 바뀌었을 때 (각도 방식·색 변경·처음부터)
+  function resetRenderer() {
+    gen++;
+    renderer.post({ type: 'reset' });
+    sentUpTo = 0;
+    bufStale = true;
+    forceRender = true;
+  }
+  function flushAppends() {
+    if (sentUpTo >= n) return;
+    const p = pts.slice(sentUpTo * 2, n * 2 + 2);
+    const c = cols.slice(sentUpTo, n);
+    renderer.post({ type: 'append', start: sentUpTo, pts: p, cols: c }, [p.buffer, c.buffer]);
+    sentUpTo = n;
   }
 
-  function strokeStyleFor(ctx, k, glow) {
-    ctx.strokeStyle = COLORS[k];
-    if (glow) { ctx.globalAlpha = 0.16; ctx.lineWidth = 6 / cam.s; }
-    else { ctx.globalAlpha = 0.95; ctx.lineWidth = 1.3 / cam.s; }
+  function bufferSize() {
+    const wd = W * DPR, hd = H * DPR;
+    const m = Math.max(1.3, Math.min(BUF_MARGIN, Math.sqrt(BUF_MAX_PIXELS / (wd * hd))));
+    return [Math.min(16000, Math.round(wd * m)), Math.min(16000, Math.round(hd * m))];
   }
 
-  function fullRedraw() {
-    tCtx.setTransform(1, 0, 0, 1, 0, 0);
-    tCtx.clearRect(0, 0, trailCanvas.width, trailCanvas.height);
-    setWorldTransform(tCtx);
-    tCtx.lineCap = 'round';
-    tCtx.lineJoin = 'round';
-    for (let pass = 0; pass < 2; pass++) {
-      for (let k = 0; k < K; k++) {
-        strokeStyleFor(tCtx, k, pass === 0);
-        tCtx.stroke(paths[k]);
-      }
+  function requestRender() {
+    if (inflight) return;
+    flushAppends();
+    const [w, h] = bufferSize();
+    // 카메라가 향하는 목표 위치·배율 기준으로 그려 둔다
+    renderer.post({
+      type: 'render', id: ++renderId, gen,
+      cx: target.x, cy: target.y, s: target.s * DPR, w, h,
+      glow: GLOW_PX * DPR, core: CORE_PX * DPR,
+    });
+    inflight = true;
+    forceRender = false;
+  }
+
+  renderer.handlers.onResult = (m) => {
+    if (m.type !== 'rendered') return;
+    inflight = false;
+    if (m.gen !== gen) {             // 그 사이 리셋됨 → 버리고 다시
+      if (m.bitmap && m.bitmap.close) m.bitmap.close();
+      forceRender = true;
+      return;
     }
-    tCtx.globalAlpha = 1;
-    drawnUpTo = n;
-    renderCam = { x: cam.x, y: cam.y, s: cam.s };
-    previewing = false;
-    needFull = false;
-    renderZones();
-  }
+    if (buf.width !== m.w || buf.height !== m.h) { buf.width = m.w; buf.height = m.h; }
+    bufCtx.setTransform(1, 0, 0, 1, 0, 0);
+    bufCtx.clearRect(0, 0, m.w, m.h);
+    bufCtx.drawImage(m.bitmap, 0, 0);
+    if (m.bitmap.close) m.bitmap.close();
+    bufCam = { x: m.cx, y: m.cy, s: m.s, w: m.w, h: m.h };
+    bufUpTo = m.upTo;
+    bufStale = false;
+    drawNewIntoBuf();
+    dirty = true;
+  };
 
-  function incrementalDraw() {
-    if (drawnUpTo >= n) return;
+  // 새로 그어진 선만 버퍼에 덧그리기
+  function drawNewIntoBuf() {
+    if (!bufCam || bufStale || bufUpTo >= n) return;
     const tmp = new Array(K).fill(null);
-    for (let i = drawnUpTo; i < n; i++) {
+    for (let i = bufUpTo; i < n; i++) {
       const c = cols[i];
       if (!tmp[c]) tmp[c] = new Path2D();
       tmp[c].moveTo(pts[i * 2], pts[i * 2 + 1]);
       tmp[c].lineTo(pts[i * 2 + 2], pts[i * 2 + 3]);
     }
-    setWorldTransform(tCtx);
-    tCtx.lineCap = 'round';
-    tCtx.lineJoin = 'round';
+    const s = bufCam.s;
+    bufCtx.setTransform(s, 0, 0, s, bufCam.w / 2 - bufCam.x * s, bufCam.h / 2 - bufCam.y * s);
+    bufCtx.lineCap = 'round';
+    bufCtx.lineJoin = 'round';
     for (let pass = 0; pass < 2; pass++) {
+      bufCtx.globalAlpha = pass === 0 ? 0.16 : 0.95;
+      bufCtx.lineWidth = (pass === 0 ? GLOW_PX : CORE_PX) * DPR / s;
       for (let k = 0; k < K; k++) {
         if (!tmp[k]) continue;
-        strokeStyleFor(tCtx, k, pass === 0);
-        tCtx.stroke(tmp[k]);
+        bufCtx.strokeStyle = COLORS[k];
+        bufCtx.stroke(tmp[k]);
       }
     }
-    tCtx.globalAlpha = 1;
-    drawnUpTo = n;
+    bufCtx.globalAlpha = 1;
+    bufUpTo = n;
+    dirty = true;
   }
 
-  // 줄이 아주 많을 때 화면 이동 중엔 이전 렌더 결과를 늘려/옮겨서 보여줌
-  function drawPreview() {
-    if (!previewing) {
-      cacheCtx.setTransform(1, 0, 0, 1, 0, 0);
-      cacheCtx.clearRect(0, 0, cache.width, cache.height);
-      cacheCtx.drawImage(trailCanvas, 0, 0);
-      previewing = true;
-    }
-    const k = cam.s / renderCam.s;
-    const ox = W / 2 - (W / 2) * k + (renderCam.x - cam.x) * cam.s;
-    const oy = H / 2 - (H / 2) * k + (renderCam.y - cam.y) * cam.s;
+  // 버퍼를 다시 그려야 하는지: 확대 비율이 많이 달라졌거나, 화면이 버퍼 가장자리에 가까워졌을 때
+  function needsRender() {
+    if (forceRender || !bufCam) return true;
+    // 카메라가 자동으로 이동 중일 땐 도착할 목표 화면 기준으로 판단
+    const r = (target.s * DPR) / bufCam.s;
+    if (r > RERENDER_ZOOM || r < 1 / RERENDER_ZOOM) return true;
+    const bhw = bufCam.w / 2 / bufCam.s, bhh = bufCam.h / 2 / bufCam.s;
+    const hw = W / 2 / target.s, hh = H / 2 / target.s;
+    const pad = 0.2;                // 화면의 20%만큼 여유가 남으면 미리 다시 그림
+    return Math.abs(target.x - bufCam.x) + hw * (1 + pad) > bhw ||
+           Math.abs(target.y - bufCam.y) + hh * (1 + pad) > bhh;
+  }
+
+  // 버퍼 이미지를 현재 카메라에 맞게 옮기고 늘려서 화면에 합성
+  function composite() {
     tCtx.setTransform(1, 0, 0, 1, 0, 0);
     tCtx.clearRect(0, 0, trailCanvas.width, trailCanvas.height);
-    tCtx.drawImage(cache, ox * DPR, oy * DPR, cache.width * k, cache.height * k);
-    renderZones();
-  }
-
-  function viewChanged() {
-    lastViewChange = performance.now();
-    if (n < HEAVY) requestFull();
-    else drawPreview();
-  }
-
-  function renderZones() {
-    bgCtx.setTransform(1, 0, 0, 1, 0, 0);
-    bgCtx.clearRect(0, 0, bgCanvas.width, bgCanvas.height);
-    if (!showZones) return;
-    const cell = 10;
-    const cw = Math.ceil(W / cell) + 1, ch = Math.ceil(H / cell) + 1;
-    if (zoneSmall.width !== cw || zoneSmall.height !== ch) { zoneSmall.width = cw; zoneSmall.height = ch; }
-    const img = zoneSmallCtx.createImageData(cw, ch);
-    const d = img.data;
-    for (let j = 0; j < ch; j++) {
-      for (let i = 0; i < cw; i++) {
-        const [wx, wy] = screenToWorld(i * cell, j * cell);
-        const rgb = COLORS_RGB[zoneAt(wx, wy)];
-        const p = (j * cw + i) * 4;
-        d[p] = rgb[0]; d[p + 1] = rgb[1]; d[p + 2] = rgb[2]; d[p + 3] = 34;
-      }
-    }
-    zoneSmallCtx.putImageData(img, 0, 0);
-    bgCtx.imageSmoothingEnabled = true;
-    bgCtx.drawImage(zoneSmall, 0, 0, cw, ch, 0, 0, cw * cell * DPR, ch * cell * DPR);
+    if (!bufCam) return;
+    const k = (cam.s * DPR) / bufCam.s;
+    const left = bufCam.x - bufCam.w / 2 / bufCam.s;
+    const top = bufCam.y - bufCam.h / 2 / bufCam.s;
+    const dx = (left - cam.x) * cam.s * DPR + trailCanvas.width / 2;
+    const dy = (top - cam.y) * cam.s * DPR + trailCanvas.height / 2;
+    tCtx.imageSmoothingEnabled = true;
+    tCtx.imageSmoothingQuality = k < 1 ? 'high' : 'low';
+    tCtx.drawImage(buf, dx, dy, bufCam.w * k, bufCam.h * k);
   }
 
   // ---------------------------------------------------------
@@ -678,6 +800,7 @@
   // 메인 루프
   // ---------------------------------------------------------
   let lastT = performance.now();
+  let lastFlush = 0;
 
   function frame(now) {
     const dt = Math.min(0.1, (now - lastT) / 1000);
@@ -703,9 +826,10 @@
     updateCameraTarget(ps);
     stepCamera(dt);
 
-    if (previewing && now - lastViewChange > 160) needFull = true;
-    if (needFull) fullRedraw();
-    else if (!previewing) incrementalDraw();
+    drawNewIntoBuf();
+    if (needsRender()) requestRender();
+    else if (!inflight && sentUpTo < n && now - lastFlush > 250) { flushAppends(); lastFlush = now; }
+    if (dirty) { composite(); dirty = false; }
 
     drawOverlay(ps);
     updateHud();
@@ -791,7 +915,9 @@
     cam.x = cam.y = target.x = target.y = 0;
     cam.s = target.s = 2;
     if (camMode === 'free') setCamMode('follow');
-    requestFull();
+    resetRenderer();
+    bufCam = null;
+    dirty = true;
     setPlaying(true);
   }
 
@@ -872,19 +998,16 @@
     applyColors();
   });
   function recolor() {
-    paths = Array.from({ length: K }, () => new Path2D());
+    refreshZoneFn();
     for (let i = 0; i < n; i++) {
-      const x0 = pts[i * 2], y0 = pts[i * 2 + 1], x1 = pts[i * 2 + 2], y1 = pts[i * 2 + 3];
-      const c = zoneAt((x0 + x1) / 2, (y0 + y1) / 2);
-      cols[i] = c;
-      paths[c].moveTo(x0, y0);
-      paths[c].lineTo(x1, y1);
+      cols[i] = zoneAt((pts[i * 2] + pts[i * 2 + 2]) / 2, (pts[i * 2 + 1] + pts[i * 2 + 3]) / 2);
     }
     if (anim.active) anim.color = zoneAt((anim.x0 + anim.x1) / 2, (anim.y0 + anim.y1) / 2);
-    requestFull();
+    sendConfig();
+    resetRenderer();
   }
 
-  document.getElementById('chkZones').addEventListener('change', e => { showZones = e.target.checked; renderZones(); });
+  document.getElementById('chkZones').addEventListener('change', e => { showZones = e.target.checked; sendConfig(); forceRender = true; });
   document.getElementById('chkDisc').addEventListener('change', e => { showDisc = e.target.checked; });
 
   const panel = document.getElementById('panel');
@@ -1002,6 +1125,8 @@
   })();
   buildColors();
   updateGradBar();
+  refreshZoneFn();
+  sendConfig();
   resetWalk();
   resize();
   updateSpeed();
