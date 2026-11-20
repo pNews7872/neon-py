@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+  <title>π WALK — 원주율 네온 드로잉</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="stage">
+    <canvas id="bg"></canvas>
+    <canvas id="trail"></canvas>
+    <canvas id="overlay"></canvas>
+  </div>
+
+  <header id="hud">
+    <div class="title">π<span>WALK</span></div>
+    <div id="digits"><span id="digitsPast"></span><span id="digitNow"></span></div>
+    <div class="stats">
+      <span id="statCount">0</span>번째 자리 ·
+      <span id="statZoom">100%</span> ·
+      <span id="statStatus">원주율 계산 중…</span>
+    </div>
+  </header>
+
+  <aside id="panel">
+    <button id="panelToggle" class="panel-toggle" title="패널 접기/펼치기">⟨</button>
+    <div class="panel-body">
+      <section>
+        <div class="row buttons">
+          <button id="btnPlay" class="primary" title="Space">⏸ 일시정지</button>
+          <button id="btnStep" title="→">한 칸 ⏭</button>
+          <button id="btnReset" title="R">↺ 처음부터</button>
+        </div>
+      </section>
+
+      <section>
+        <label class="label">속도 <span id="speedLabel" class="value">2 /초</span></label>
+        <input id="speed" type="range" min="0" max="100" step="0.5" value="13">
+        <div class="hint">느리면 원판이 돌고 선을 긋는 모습이 보이고, 빠르면 한 번에 여러 줄을 긋습니다.</div>
+      </section>
+
+      <section>
+        <label class="label">각도 방식</label>
+        <div class="seg" id="modeSeg">
+          <button data-mode="absolute" class="on">절대 방향</button>
+          <button data-mode="relative">상대 회전</button>
+        </div>
+        <div class="hint" id="modeHint">숫자 n → 항상 n×36° 방향으로 긋기 (0 = 위쪽, 시계방향)</div>
+      </section>
+
+      <section>
+        <label class="label">카메라</label>
+        <div class="seg" id="camSeg">
+          <button data-cam="follow" class="on" title="F">따라가기</button>
+          <button data-cam="fit" title="A">전체 맞춤</button>
+          <button data-cam="free">자유</button>
+        </div>
+        <div class="hint">드래그로 이동 · 휠/핀치로 확대·축소 (조작하면 자유 모드로 바뀜)</div>
+      </section>
+
+      <section>
+        <label class="label">색 구역 크기 <span id="zoneLabel" class="value">400</span></label>
+        <input id="zoneSize" type="range" min="60" max="3000" step="10" value="400">
+        <div class="row buttons">
+          <button id="btnReseed">🎲 색 배치 바꾸기</button>
+        </div>
+        <label class="check"><input id="chkZones" type="checkbox"> 색 구역 희미하게 보기</label>
+        <label class="check"><input id="chkDisc" type="checkbox" checked> 원판 보이기</label>
+      </section>
+
+      <section class="legend" id="legend"></section>
+    </div>
+  </aside>
+
+  <div id="toast"></div>
+
+  <script src="script.js"></script>
+</body>
+</html>
