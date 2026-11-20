@@ -132,26 +132,32 @@
     growN++;
   }
 
-  // 속도 슬라이더 → 수/초 (A, 바로) 또는 단계/초 (B)
+  // 속도 슬라이더
+  //  · 수마다 뻗기: 초당 자라는 마디 수(전체). 가지 끝 여러 개가 같은 속도로 동시에 자라고,
+  //    자라는 가지가 모자라면 다음 수를 꺼내 채움 → 수마다 가지 길이가 달라도 일정하게 자람
+  //  · 뿌리부터: 초당 단계 수
+  //  · 바로 생기기: 초당 수
   const numbersPerSec = () => 0.5 * Math.pow(100000, speedVal / 100);
   const levelsPerSec = () => 0.6 * Math.pow(500, speedVal / 100);
-  // 가지 끝이 자라는 속도 (마디/초): 수가 빨리 추가될수록 같이 빨라짐
-  const tipSpeed = () => Math.min(4000, 18 + numbersPerSec() * 1.5);
+  const growRate = () => 2 * Math.pow(25000, speedVal / 100);                   // 2 ~ 50,000 마디/초
+  const tipSpeed = () => Math.max(10, Math.min(300, Math.sqrt(growRate()) * 5));  // 가지 끝 하나의 속도
+  const targetTips = () => Math.max(1, Math.round(growRate() / tipSpeed()));       // 동시에 자라는 가지 수
+
+  // 출발하는 줄기 마디가 이미 자랐는지 (허공에서 돋아나지 않게)
+  function canStart(t) { const root = npar[t.nodes[0]]; return root <= 0 || vis[root] === 1; }
 
   function stepTips(dt) {
     const sp = tipSpeed();
     const keep = [];
     for (const t of tips) {
       if (!t.started) {
-        // 출발하는 줄기 마디가 아직 안 자랐으면 기다림 (허공에서 돋아나지 않게)
-        const root = npar[t.nodes[0]];
-        if (root > 0 && !vis[root]) { keep.push(t); continue; }
+        if (!canStart(t)) { keep.push(t); continue; }
         t.started = true;
       }
       t.p += sp * dt;
       while (t.done < t.nodes.length && t.p >= t.done + 1) showNode(t.nodes[t.done++]);
       if (t.done < t.nodes.length) {
-        pushGrow(t.nodes[t.done], NK.easeInOut(Math.min(1, t.p - t.done)));
+        pushGrow(t.nodes[t.done], Math.min(1, t.p - t.done));   // 일정한 속도로 (마디마다 멈칫하지 않게)
         keep.push(t);
       }
       if (t === newestTip) lastShown = t.done > 0 ? t.nodes[t.done - 1] : npar[t.nodes[0]];
@@ -177,7 +183,7 @@
     const full = Math.floor(front);
     for (let d = Math.max(1, before); d <= Math.min(full, maxDepth); d++) for (const i of buckets[d]) showNode(i);
     if (full + 1 <= maxDepth && full + 1 >= 1) {
-      const f = NK.easeInOut(front - full);
+      const f = front - full;                 // 일정한 속도로
       const b = buckets[full + 1];
       for (let k = 0; k < b.length; k++) pushGrow(b[k], f);
       if (b.length) lastShown = npar[b[b.length - 1]];
@@ -268,7 +274,7 @@
       // 지금 자라는 끝까지 이어서
       if (newestTip && newestTip.done < newestTip.nodes.length && growN) {
         const hd = newestTip.nodes[newestTip.done];
-        const f = NK.easeInOut(Math.min(1, newestTip.p - newestTip.done));
+        const f = Math.min(1, newestTip.p - newestTip.done);
         const [hx, hy] = view.worldToScreen(nx[npar[hd]] + (nx[hd] - nx[npar[hd]]) * f, ny[npar[hd]] + (ny[hd] - ny[npar[hd]]) * f);
         oCtx.moveTo(hx, hy); oCtx.lineTo(sx, sy);
         [sx, sy] = [hx, hy];
@@ -307,19 +313,30 @@
       if (precomputing) precomputeStep();
       else if (playing) stepRoot(dt);
       else if (buckets) stepRoot(0);
-    } else {
+    } else if (growMode === 'instant') {
       if (playing) {
         acc += numbersPerSec() * dt;
         let k = Math.min(Math.floor(acc), MAX_PER_FRAME);
         acc -= Math.floor(acc);
-        // 너무 빠르면 자라는 애니메이션 없이 바로
-        const instant = growMode === 'instant' || numbersPerSec() > 3000;
         while (k-- > 0 && nextStart <= maxN) {
-          const n = nextStart++;
-          const made = addNumber(n);
+          const made = addNumber(nextStart++);
+          for (const i of made) showNode(i);
+          if (made.length) lastShown = made[made.length - 1];
+        }
+      }
+    } else {
+      if (playing) {
+        // 자라는 가지가 목표보다 적으면 다음 수를 꺼내서 채움 (새 마디가 없는 수는 건너뜀)
+        let active = 0;
+        for (const t of tips) if (t.started || canStart(t)) active++;
+        const want = targetTips();
+        let tries = 0;
+        while (active < want && nextStart <= maxN && tries++ < MAX_PER_FRAME) {
+          const made = addNumber(nextStart++);
           if (!made.length) continue;
-          if (instant) { for (const i of made) showNode(i); lastShown = made[made.length - 1]; newestTip = null; }
-          else { const t = { nodes: made, p: 0, done: 0, started: false }; tips.push(t); newestTip = t; }
+          const t = { nodes: made, p: 0, done: 0, started: false };
+          tips.push(t); newestTip = t;
+          if (canStart(t)) active++;
         }
         if (tips.length) stepTips(dt);
       } else if (tips.length) stepTips(0);
@@ -328,6 +345,11 @@
     if (playing && finished) setPlaying(false, true);
 
     if (GPU) { growLayer.clear(); if (growN) growLayer.appendSegs(growSegs, growCols, growN); }
+    if (window.__growTrace) {          // 테스트용: 지금까지 자란 길이(마디 단위) 기록
+      let part = 0;
+      for (let k = 0; k < growN; k++) part += Math.hypot(growSegs[k * 4 + 2] - growSegs[k * 4], growSegs[k * 4 + 3] - growSegs[k * 4 + 1]) / STEP;
+      window.__growTrace.push([dt, shownCount + part]);
+    }
     view.tick(dt, now);
     drawOverlay();
     updateHud();
@@ -420,12 +442,14 @@
       const v = levelsPerSec();
       speedLabel.textContent = `${v < 10 ? v.toFixed(1) : Math.round(v)} 단계/초`;
       speedHint.textContent = '1에서 한 단계씩 바깥으로, 모든 가지가 같이 자라요.';
+    } else if (growMode === 'tips') {
+      const v = growRate();
+      speedLabel.textContent = `${v < 10 ? v.toFixed(1) : Math.round(v).toLocaleString('ko-KR')} 마디/초`;
+      speedHint.textContent = `가지 끝 ${targetTips().toLocaleString('ko-KR')}개가 같은 속도로 동시에 뻗어 나가요. 수마다 새 가지 길이가 달라도 일정하게 자라요.`;
     } else {
       const v = numbersPerSec();
       speedLabel.textContent = `${v < 10 ? v.toFixed(1) : Math.round(v).toLocaleString('ko-KR')} 개/초`;
-      speedHint.textContent = growMode === 'tips'
-        ? '수가 추가될 때마다 새 가지가 줄기에서 뻗어 나가요. 아주 빠르면(3,000개/초 이상) 바로 생겨요.'
-        : '느리면 수 하나하나가 1까지 가는 길이 빛나는 게 보여요.';
+      speedHint.textContent = '느리면 수 하나하나가 1까지 가는 길이 빛나는 게 보여요.';
     }
   }
   speedIn.addEventListener('input', updateSpeed);

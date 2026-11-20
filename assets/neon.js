@@ -640,6 +640,8 @@
       const W = this.W - inset;
       const bw = Math.max(bounds.maxX - bounds.minX, 120);
       const bh = Math.max(bounds.maxY - bounds.minY, 120);
+      // GPU로 그리면 다시 그리는 비용이 없으니 계단식으로 버티지 않고 매 프레임 부드럽게 맞춤
+      if (this.gpu && !force) force = 'smooth';
       if (!force) {
         // 보이는 영역(패널 제외) 안에 다 들어오면 그대로 둔다
         const left = t.x - (this.W / 2 - pad) / t.s;
@@ -648,7 +650,7 @@
         if (bounds.minX > left && bounds.maxX < right &&
             bounds.minY > t.y - hh && bounds.maxY < t.y + hh) return;
       }
-      const room = force ? 1.15 : 1.6;
+      const room = force === 'smooth' ? 1.12 : force ? 1.15 : 1.6;
       let s = Math.min((W - pad * 2) / (bw * room), (H - pad * 2) / (bh * room));
       s = Math.min(s, this.maxFitScale);
       t.x = (bounds.minX + bounds.maxX) / 2 + inset / 2 / s;
