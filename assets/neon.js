@@ -367,6 +367,35 @@
       this.lastFlush = 0;
       this.renderer.handlers.onResult = (m) => this._onResult(m);
 
+      // GPU(WebGL2) 렌더링: 되면 매 프레임 GPU로 전부 그림, 안 되면 위의 캔버스 방식
+      this.gpu = false;
+      this.drawsFn = opts.draws || null;   // 페이지가 그릴 목록을 직접 정할 때
+      const noGl = /[?&]gl=0\b/.test(location.search);
+      if (!noGl && opts.gpu !== false && global.NeonGL) {
+        try {
+          const cv = document.createElement('canvas');
+          cv.id = 'gl';
+          this.trail.parentNode.insertBefore(cv, this.trail);
+          const glr = global.NeonGL.create(cv);
+          if (glr) {
+            this.glr = glr; this.glCanvas = cv; this.gpu = true;
+            this.segLayer = glr.createSegLayer();
+            this.uploaded = 0;
+            this._gpuReset = false;
+            this.trail.style.display = 'none';
+            const mobile = global.matchMedia && global.matchMedia('(pointer: coarse)').matches;
+            this.ss = !mobile && (global.devicePixelRatio || 1) < 1.75 ? 1.25 : 1;   // 슈퍼샘플링
+            cv.addEventListener('webglcontextlost', (e) => {
+              e.preventDefault();
+              this.gpu = false; this.trail.style.display = 'block'; cv.style.display = 'none';
+              this.forceRender = true; this.bufCam = null; this.dirty = true;
+              this.sendConfig(); this.resetRenderer();
+              toast('GPU 그리기가 중단돼서 기본 방식으로 바꿨어요');
+            });
+          } else cv.remove();
+        } catch (err) { console.warn('WebGL2 사용 불가', err); }
+      }
+
       this._bindInput();
       styleListeners.push(() => { this.forceRender = true; });
       window.addEventListener('resize', () => this.resize());
@@ -401,10 +430,12 @@
     // ---------- 렌더러와 통신 ----------
     sendConfig() {
       const c = this.color;
+      if (this.gpu) this.glr.setPalette(c.rgb);
       this.renderer.post({ type: 'config', K, colors: c.colors, colorsRgb: c.rgb, seed: c.seed, zoneScale: c.zoneScale, showZones: c.showZones });
     }
     // 선 데이터가 통째로 바뀌었을 때 (색 변경·다시 계산·처음부터)
     resetRenderer(clear) {
+      if (this.gpu) { this._gpuReset = true; return; }
       this.gen++;
       this.renderer.post({ type: 'reset' });
       this.sentUpTo = 0;
@@ -620,9 +651,26 @@
     }
 
     // 매 프레임 호출: 카메라 이동, 버퍼 갱신, 화면 합성
+    // GPU 한 프레임: 새로 생긴 선만 GPU에 덧붙이고, 지금 카메라 그대로 전부 그림
+    gpuFrame() {
+      const st = this.store, L = this.segLayer;
+      if (this._gpuReset || st.n < this.uploaded) { L.reset(); this.uploaded = 0; this._gpuReset = false; }
+      if (st.n > this.uploaded) { L.appendFrom(st.pts, st.cols, this.uploaded, st.n); this.uploaded = st.n; }
+      const ss = this.ss;
+      const w = Math.max(1, Math.round(this.W * this.DPR * ss)), h = Math.max(1, Math.round(this.H * this.DPR * ss));
+      this.glr.resize(w, h);
+      const px = this.DPR * ss;
+      const core = lineStyle.core * px;
+      const style = { halfW: Math.max(0.5, core / 2), hot: lineStyle.core >= 1.1 ? 1 : 0, bloom: 0.34 * lineStyle.glow, exposure: 1.3 };
+      const draws = this.drawsFn ? this.drawsFn(L) : [{ layer: L }];
+      const zone = this.color.showZones ? { seed: this.color.seed, scale: this.color.zoneScale, alpha: 0.12 } : null;
+      this.glr.frame({ x: this.cam.x, y: this.cam.y, s: this.cam.s * px, rot: 0 }, draws, style, zone);
+    }
+
     tick(dt, now, opts = {}) {
       this.updateCameraTarget();
       this.stepCamera(dt);
+      if (this.gpu) { this.gpuFrame(); return true; }
       // 카메라가 잠깐 멈추면, 지금 배율·위치 그대로 정확히 다시 그려 선명하게
       const c = this.cam, pc = this._prevCam || (this._prevCam = { x: NaN, y: NaN, s: NaN });
       if (c.x !== pc.x || c.y !== pc.y || c.s !== pc.s) { this._lastMove = now; pc.x = c.x; pc.y = c.y; pc.s = c.s; }

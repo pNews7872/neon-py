@@ -19,7 +19,7 @@
   const store = new NK.SegStore();
 
   let gen = 0;                                         // 현재 세대 (선 2^gen 개)
-  let maxGen = clampInt(params.get('max'), 1, 20, 16);
+  let maxGen = clampInt(params.get('max'), 1, 24, 16);   // 실제 상한은 아래 GEN_LIMIT 로 다시 자름
   let dirSign = params.get('dir') === 'ccw' ? -1 : 1;  // 1 = 시계 방향(화면 기준)
   let colorMode = ['gen', 'order', 'zone'].includes(params.get('cm')) ? params.get('cm') : 'gen';
   let playing = true;
@@ -59,6 +59,25 @@
     fitBounds: () => (anim.active ? predictedBounds() : store.bounds),
   });
   const oCtx = view.overlay.getContext('2d');
+  const GPU = view.gpu;
+  const IS_MOBILE = window.matchMedia && window.matchMedia('(pointer: coarse)').matches;
+  // GPU면 선을 브라우저 메모리에 경로로 쌓지 않아서 더 높이 갈 수 있음
+  const GEN_LIMIT = GPU ? (IS_MOBILE ? 21 : 23) : 20;
+  maxGen = Math.min(maxGen, GEN_LIMIT);
+  if (GPU) {
+    // 회전하는 복사본 = 같은 선들을 회전축 기준으로 돌려서 한 번 더 그림 (새로 만들 필요 없음)
+    view.drawsFn = (L) => {
+      const d = [{ layer: L }];
+      if (anim.active) {
+        const e = NK.easeInOut(Math.min(1, anim.t));
+        d.push({
+          layer: L, pivot: [anim.px, anim.py], angle: dirSign * (Math.PI / 2) * e,
+          tint: colorMode === 'gen' ? (genColor(gen + 1) + 0.5) / K : null,
+        });
+      }
+      return d;
+    };
+  }
   const tmp = document.createElement('canvas');
   const tmpCtx = tmp.getContext('2d');
 
@@ -82,7 +101,7 @@
 
   // 다음 세대: 기존 꼭짓점을 거꾸로 돌면서 끝점 기준 90° 회전해 이어 붙임
   function nextGeneration() {
-    if (gen >= 20) return;
+    if (gen >= GEN_LIMIT) return;
     const oldN = store.n;
     const px = store.lastX, py = store.lastY;
     store.ensure(oldN);
@@ -102,7 +121,7 @@
       }
     }
     // 새 선이 많으면 워커가 다시 그려 올 때까지 돌린 복사본을 대신 보여줌
-    if (colorMode === 'order' || oldN > MAX_DIRECT) {
+    if (!GPU && (colorMode === 'order' || oldN > MAX_DIRECT)) {
       ghost.active = true;
       ghost.px = px; ghost.py = py;
       ghost.needN = store.n;
@@ -139,7 +158,7 @@
   }
 
   // 버퍼에 지금 세대가 다 그려져 있는지 (돌릴 복사본으로 쓸 수 있는지)
-  const bufferReady = () => view.bufCam && !view.bufStale && view.bufUpTo >= store.n;
+  const bufferReady = () => GPU || (view.bufCam && !view.bufStale && view.bufUpTo >= store.n);
 
   function startRotation() {
     anim.active = true;
@@ -269,7 +288,8 @@
 
     const drawCopy = anim.active || ghost.active;
     view.tick(dt, now, { maxDirect: MAX_DIRECT, alwaysComposite: drawCopy });
-    if (anim.active) {
+    if (GPU) { /* 복사본은 GPU가 같이 그림 */ }
+    else if (anim.active) {
       const e = NK.easeInOut(Math.min(1, anim.t));
       drawRotatedCopy(dirSign * (Math.PI / 2) * e, anim.px, anim.py, colorMode === 'gen' ? genColor(gen + 1) : -1);
     } else if (ghost.active) {
@@ -325,7 +345,7 @@
   function stepOnce() {
     setPlaying(false);
     if (anim.active) { finishRotation(); return; }
-    if (gen >= 20) { NK.toast('20세대가 최대예요'); return; }
+    if (gen >= GEN_LIMIT) { NK.toast(`${GEN_LIMIT}세대가 최대예요`); return; }
     if (gen >= maxGen) { maxGen = gen + 1; syncMax(); }
     anim.px = store.lastX; anim.py = store.lastY;
     nextGeneration();
@@ -353,6 +373,9 @@
   durInput.addEventListener('input', updateDuration);
 
   const maxInput = document.getElementById('maxGen');
+  maxInput.max = GEN_LIMIT;
+  if (GPU) maxInput.parentElement.querySelector('.hint').textContent =
+    `세대마다 선이 2배로 늘어나요. 최대 ${GEN_LIMIT}세대 = 선 ${(2 ** GEN_LIMIT).toLocaleString('ko-KR')}개 (GPU로 그림).`;
   const maxLabel = document.getElementById('maxLabel');
   function syncMax() {
     maxInput.value = maxGen;

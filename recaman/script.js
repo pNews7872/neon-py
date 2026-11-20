@@ -88,11 +88,20 @@
     }
   }
 
+  // GPU: 반원 하나를 레이어에 추가
+  function gpuArc(t, tEnd) {
+    const [ax, ay] = apex(t.p, t.v, t.n);
+    const c = arcColor(t.n, t.dir, ax, ay, ax, ay);
+    arcLayer.push(t.p * UNIT, t.v * UNIT, sideOf(t.n), tEnd, c);
+    growBounds(t.p, t.v);
+    lastCol = c;
+  }
+
   // 한 항 통째로 그리기
   function commitTerm() {
     if (seq.length > maxN) return false;
     const t = nextTerm();
-    pushArc(t.p, t.v, t.n, t.dir, 0, 1);
+    if (GPU) gpuArc(t, 1); else pushArc(t.p, t.v, t.n, t.dir, 0, 1);
     seq.push(t.v); dirs.push(t.dir); markSeen(t.v);
     if (t.v > maxVal) maxVal = t.v;
     return true;
@@ -102,9 +111,21 @@
     seq = [0]; dirs = [0]; seen = new Uint8Array(1024); seen[0] = 1; maxVal = 0;
     store.reset(0, 0);
     anim.active = false;
+    if (GPU) { arcLayer.reset(); Object.assign(arcBounds, { minX: 0, minY: 0, maxX: 0, maxY: 0 }); }
   }
 
   function recolor() {
+    if (GPU) {
+      for (let n = 1; n < seq.length + (anim.active ? 1 : 0); n++) {
+        const p = seq[n - 1], v = n < seq.length ? seq[n] : anim.v, d = n < seq.length ? dirs[n] : anim.dir;
+        const [ax, ay] = apex(p, v, n);
+        const c = arcColor(n, d, ax, ay, ax, ay);
+        arcLayer.setColor(n - 1, c);
+        lastCol = c;
+      }
+      view.sendConfig();
+      return;
+    }
     // 선 순서대로 각 선이 몇 번째 항에 속하는지 다시 계산
     let i = 0;
     const p = store.pts;
@@ -131,11 +152,13 @@
     if (seq.length > maxN) return false;
     const info = nextTerm();
     Object.assign(anim, { active: true, t: 0, drawnT: 0, n: info.n, p: info.p, v: info.v, dir: info.dir, info });
+    if (GPU) gpuArc(info, 0);
     return true;
   }
   function advanceAnim(dt) {
     anim.t = Math.min(1, anim.t + dt * speed);
     const e = NK.easeInOut(anim.t);
+    if (GPU) { arcLayer.setLastT(e); if (anim.t >= 1) finishAnim(); return; }
     if (e > anim.drawnT) {
       pushArc(anim.p, anim.v, anim.n, anim.dir, anim.drawnT, e);
       anim.drawnT = Math.round(e * arcSegments(anim.p, anim.v)) / arcSegments(anim.p, anim.v);
@@ -143,7 +166,8 @@
     if (anim.t >= 1) finishAnim();
   }
   function finishAnim() {
-    if (anim.drawnT < 1) pushArc(anim.p, anim.v, anim.n, anim.dir, anim.drawnT, 1);
+    if (GPU) arcLayer.setLastT(1);
+    else if (anim.drawnT < 1) pushArc(anim.p, anim.v, anim.n, anim.dir, anim.drawnT, 1);
     seq.push(anim.v); dirs.push(anim.dir); markSeen(anim.v);
     if (anim.v > maxVal) maxVal = anim.v;
     anim.active = false;
@@ -151,7 +175,10 @@
 
   // ---------------------------------------------------------
   // 뷰
+  // GPU가 되면 반원을 셰이더가 직접 그림(조각내지 않음, 아무리 확대해도 매끈).
+  // 안 되면 반원을 짧은 선으로 나눠 캔버스로 그림.
   // ---------------------------------------------------------
+  const arcBounds = { minX: 0, minY: 0, maxX: 0, maxY: 0 };
   const view = new NK.NeonView({
     trail: document.getElementById('trail'),
     overlay: document.getElementById('overlay'),
@@ -159,9 +186,28 @@
     camMode: 'fit',
     maxFitScale: 6,
     onCamMode: m => setCamSeg(m),
-    followPoint: () => [store.lastX, store.lastY],
+    followPoint: () => penPos(),
+    fitBounds: () => (GPU ? arcBounds : store.bounds),
   });
   const oCtx = view.overlay.getContext('2d');
+  const GPU = view.gpu;
+  const arcLayer = GPU ? view.glr.createArcLayer() : null;
+  if (GPU) view.drawsFn = () => [{ layer: arcLayer }];
+  let lastCol = 0;
+
+  // 펜(지금 그리고 있는 끝) 위치
+  function penPos() {
+    if (anim.active) return arcPoint(anim.p, anim.v, anim.n, NK.easeInOut(anim.t));
+    return [seq[seq.length - 1] * UNIT, 0];
+  }
+  function growBounds(p, v) {
+    const r = Math.abs(v - p) * UNIT / 2;
+    arcBounds.maxX = Math.max(arcBounds.maxX, Math.max(p, v) * UNIT);
+    arcBounds.minY = Math.min(arcBounds.minY, -r);
+    arcBounds.maxY = Math.max(arcBounds.maxY, r);
+  }
+  // 색 구역용: 반원 꼭대기 위치
+  const apex = (p, v, n) => arcPoint(p, v, n, 0.5);
 
   // ---------------------------------------------------------
   // 오버레이: 수직선 + 펜
@@ -195,8 +241,9 @@
     }
 
     if (!showPen) return;
-    const [px, py] = view.worldToScreen(store.lastX, store.lastY);
-    const col = color.colors[store.n > 0 ? store.cols[store.n - 1] : 0];
+    const pp = GPU ? penPos() : [store.lastX, store.lastY];
+    const [px, py] = view.worldToScreen(pp[0], pp[1]);
+    const col = color.colors[GPU ? lastCol : store.n > 0 ? store.cols[store.n - 1] : 0];
     oCtx.save();
     oCtx.shadowColor = col; oCtx.shadowBlur = 18;
     oCtx.fillStyle = '#fff';
@@ -271,7 +318,7 @@
     const shown = seq.slice(Math.max(0, seq.length - 14));
     elPast.textContent = (seq.length > 14 ? '… ' : '') + (anim.active ? shown.join(', ') + ',' : shown.slice(0, -1).join(', ') + (shown.length > 1 ? ',' : ''));
     elNow.textContent = anim.active ? '?' : String(seq[seq.length - 1]);
-    elNow.style.color = color.colors[store.n > 0 ? store.cols[store.n - 1] : 0];
+    elNow.style.color = color.colors[GPU ? lastCol : store.n > 0 ? store.cols[store.n - 1] : 0];
 
     // 규칙 설명
     const info = anim.active ? anim.info : (seq.length > 1 ? lastInfo() : null);
@@ -337,7 +384,7 @@
   const maxIn = document.getElementById('maxN');
   const maxLabel = document.getElementById('maxLabel');
   function updateMax() {
-    const raw = 100 * Math.pow(200, parseFloat(maxIn.value) / 100);        // 100 ~ 20,000
+    const raw = 100 * Math.pow(MAX_FACTOR, parseFloat(maxIn.value) / 100);   // GPU 100 ~ 100,000 / 캔버스 100 ~ 20,000
     maxN = raw >= 1000 ? Math.round(raw / 100) * 100 : Math.round(raw / 10) * 10;
     maxLabel.textContent = maxN.toLocaleString('ko-KR');
   }
@@ -396,11 +443,10 @@
   // ---------------------------------------------------------
   // 시작
   // ---------------------------------------------------------
+  const MAX_FACTOR = GPU ? 1000 : 200;
   const pMax = parseInt(params.get('max'), 10);
-  if (Number.isFinite(pMax)) {
-    const v = Math.max(100, Math.min(20000, pMax));
-    maxIn.value = Math.log(v / 100) / Math.log(200) * 100;
-  }
+  const startMax = Number.isFinite(pMax) ? Math.max(100, Math.min(100 * MAX_FACTOR, pMax)) : 3000;
+  maxIn.value = Math.log(startMax / 100) / Math.log(MAX_FACTOR) * 100;
   updateMax();
   updateSpeed();
   updateCmUi();
